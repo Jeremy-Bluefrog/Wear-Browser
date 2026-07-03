@@ -36,3 +36,10 @@ data class HistoryEntry(
     val timestamp: Long = System.currentTimeMillis()
 )
 
+@Entity(tableName = "search_history")
+data class SearchHistory(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val query: String,
+    val timestamp: Long = System.currentTimeMillis()
+)
+

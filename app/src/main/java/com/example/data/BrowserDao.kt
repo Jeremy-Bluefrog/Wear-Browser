@@ -43,4 +43,16 @@ interface BrowserDao {
 
     @Query("DELETE FROM history_entries")
     suspend fun clearAllHistory()
+
+    @Query("SELECT * FROM search_history ORDER BY timestamp DESC")
+    fun getAllSearchHistory(): Flow<List<SearchHistory>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertSearchHistory(entry: SearchHistory)
+
+    @Query("DELETE FROM search_history WHERE id = :id")
+    suspend fun deleteSearchHistoryEntry(id: Long)
+
+    @Query("DELETE FROM search_history")
+    suspend fun clearSearchHistory()
 }

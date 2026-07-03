@@ -7,6 +7,7 @@ class BrowserRepository(private val dao: BrowserDao) {
     val cachedPages: Flow<List<CachedPage>> = dao.getAllCachedPages()
     val downloadedFiles: Flow<List<DownloadedFile>> = dao.getAllDownloadedFiles()
     val history: Flow<List<HistoryEntry>> = dao.getAllHistory()
+    val searchHistory: Flow<List<SearchHistory>> = dao.getAllSearchHistory()
 
     suspend fun addBookmark(url: String, title: String) {
         dao.insertBookmark(Bookmark(url, title))
@@ -46,5 +47,17 @@ class BrowserRepository(private val dao: BrowserDao) {
 
     suspend fun clearHistory() {
         dao.clearAllHistory()
+    }
+
+    suspend fun addSearchHistoryEntry(query: String) {
+        dao.insertSearchHistory(SearchHistory(query = query))
+    }
+
+    suspend fun removeSearchHistoryEntry(id: Long) {
+        dao.deleteSearchHistoryEntry(id)
+    }
+
+    suspend fun clearSearchHistory() {
+        dao.clearSearchHistory()
     }
 }

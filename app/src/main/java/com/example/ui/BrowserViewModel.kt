@@ -33,6 +33,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     val cachedPages: StateFlow<List<com.example.data.CachedPage>>
     val downloadedFiles: StateFlow<List<DownloadedFile>>
     val history: StateFlow<List<com.example.data.HistoryEntry>>
+    val searchHistory: StateFlow<List<com.example.data.SearchHistory>>
     
     private val _currentUrl = MutableStateFlow("wearbrowser://home")
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
@@ -60,6 +61,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         cachedPages = repository.cachedPages.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         downloadedFiles = repository.downloadedFiles.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         history = repository.history.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        searchHistory = repository.searchHistory.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         
         observeBattery(application)
         observePowerSaveMode(application)
@@ -341,6 +343,26 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun setSearchEngine(engine: String) {
         _searchEngine.value = engine
+    }
+
+    fun addSearchHistory(query: String) {
+        if (query.isNotBlank()) {
+            viewModelScope.launch(Dispatchers.IO) {
+                repository.addSearchHistoryEntry(query)
+            }
+        }
+    }
+
+    fun removeSearchHistory(id: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.removeSearchHistoryEntry(id)
+        }
+    }
+
+    fun clearSearchHistory() {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.clearSearchHistory()
+        }
     }
 
     override fun onCleared() {
