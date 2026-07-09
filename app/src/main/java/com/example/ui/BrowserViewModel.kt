@@ -33,13 +33,32 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     val cachedPages: StateFlow<List<com.example.data.CachedPage>>
     val downloadedFiles: StateFlow<List<DownloadedFile>>
     val history: StateFlow<List<com.example.data.HistoryEntry>>
+    val recentHistory: StateFlow<List<com.example.data.HistoryEntry>>
     val searchHistory: StateFlow<List<com.example.data.SearchHistory>>
     
-    private val _currentUrl = MutableStateFlow("wearbrowser://home")
+    private val _currentUrl = MutableStateFlow("pixelbrowser://home")
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
 
     private val _isDeepMode = MutableStateFlow(true) // Default to OLED friendly
     val isDeepMode: StateFlow<Boolean> = _isDeepMode.asStateFlow()
+
+    private val _isCloudRendering = MutableStateFlow(false)
+    val isCloudRendering: StateFlow<Boolean> = _isCloudRendering.asStateFlow()
+
+    private val _isTextOnly = MutableStateFlow(false)
+    val isTextOnly: StateFlow<Boolean> = _isTextOnly.asStateFlow()
+
+    private val _isAggressiveCaching = MutableStateFlow(true)
+    val isAggressiveCaching: StateFlow<Boolean> = _isAggressiveCaching.asStateFlow()
+
+    private val _isAdBlockEnabled = MutableStateFlow(true)
+    val isAdBlockEnabled: StateFlow<Boolean> = _isAdBlockEnabled.asStateFlow()
+
+    private val _isCpuThrottleEnabled = MutableStateFlow(true)
+    val isCpuThrottleEnabled: StateFlow<Boolean> = _isCpuThrottleEnabled.asStateFlow()
+
+    private val _isSmartRamCleanerEnabled = MutableStateFlow(true)
+    val isSmartRamCleanerEnabled: StateFlow<Boolean> = _isSmartRamCleanerEnabled.asStateFlow()
 
     private val _isPowerSavingMode = MutableStateFlow(false)
     val isPowerSavingMode: StateFlow<Boolean> = _isPowerSavingMode.asStateFlow()
@@ -61,6 +80,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         cachedPages = repository.cachedPages.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         downloadedFiles = repository.downloadedFiles.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         history = repository.history.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        recentHistory = repository.recentHistory.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         searchHistory = repository.searchHistory.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         
         observeBattery(application)
@@ -101,12 +121,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun navigateTo(url: String) {
-        if (url == "wearbrowser://home") {
+        if (url == "pixelbrowser://home") {
             _currentUrl.value = url
             return
         }
         var formattedUrl = url
-        if (!url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith("file://") && !url.startsWith("about:") && !url.startsWith("wearbrowser://")) {
+        if (!url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith("file://") && !url.startsWith("about:") && !url.startsWith("pixelbrowser://")) {
             formattedUrl = "https://$url"
         }
         _currentUrl.value = formattedUrl
@@ -150,9 +170,40 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         _isDeepMode.value = !_isDeepMode.value
     }
 
+    fun toggleCloudRendering() {
+        _isCloudRendering.value = !_isCloudRendering.value
+        // If Cloud Rendering is turned on, we might want to also optimize some other settings
+    }
+
+    fun toggleTextOnly() {
+        _isTextOnly.value = !_isTextOnly.value
+    }
+
+    fun toggleAggressiveCaching() {
+        _isAggressiveCaching.value = !_isAggressiveCaching.value
+    }
+
+    fun toggleAdBlock() {
+        _isAdBlockEnabled.value = !_isAdBlockEnabled.value
+    }
+
+    fun toggleCpuThrottle() {
+        _isCpuThrottleEnabled.value = !_isCpuThrottleEnabled.value
+    }
+
+    fun toggleSmartRamCleaner() {
+        _isSmartRamCleanerEnabled.value = !_isSmartRamCleanerEnabled.value
+    }
+
     fun addBookmark(url: String, title: String) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.addBookmark(url, title)
+        }
+    }
+
+    fun updateBookmark(bookmark: com.example.data.Bookmark) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.updateBookmark(bookmark)
         }
     }
 
@@ -269,7 +320,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun addToHistory(url: String, title: String) {
-        if (url.isBlank() || url == "about:blank" || url.startsWith("file://") || url == "wearbrowser://home" || url.startsWith("wearbrowser://")) return
+        if (url.isBlank() || url == "about:blank" || url.startsWith("file://") || url == "pixelbrowser://home" || url.startsWith("pixelbrowser://")) return
         viewModelScope.launch(Dispatchers.IO) {
             repository.addHistoryEntry(url, title.ifBlank { url })
         }

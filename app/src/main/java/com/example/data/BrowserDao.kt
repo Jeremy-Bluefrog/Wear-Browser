@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Update
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -13,6 +14,9 @@ interface BrowserDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertBookmark(bookmark: Bookmark)
+
+    @Update
+    suspend fun updateBookmark(bookmark: Bookmark)
 
     @Query("DELETE FROM bookmarks WHERE url = :url")
     suspend fun deleteBookmark(url: String)
@@ -34,6 +38,9 @@ interface BrowserDao {
 
     @Query("SELECT * FROM history_entries ORDER BY timestamp DESC")
     fun getAllHistory(): Flow<List<HistoryEntry>>
+
+    @Query("SELECT * FROM history_entries ORDER BY timestamp DESC LIMIT 10")
+    fun getRecentHistory(): Flow<List<HistoryEntry>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHistoryEntry(entry: HistoryEntry)

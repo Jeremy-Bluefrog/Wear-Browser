@@ -19,6 +19,8 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -30,6 +32,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.material3.SwipeToDismissBox
+import androidx.compose.material3.SwipeToDismissBoxValue
+import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.runtime.*
@@ -60,6 +65,8 @@ import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.*
 import androidx.wear.compose.material.PositionIndicator
+import androidx.compose.ui.draw.clip
+import com.example.data.*
 import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
@@ -77,12 +84,24 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     val bookmarks by viewModel.bookmarks.collectAsState()
     val downloadedFiles by viewModel.downloadedFiles.collectAsState()
     val history by viewModel.history.collectAsState()
+    val recentHistory by viewModel.recentHistory.collectAsState()
     val searchHistory by viewModel.searchHistory.collectAsState()
     val textZoom by viewModel.textZoom.collectAsState()
     val isSpeaking by viewModel.isSpeaking.collectAsState()
     val searchEngine by viewModel.searchEngine.collectAsState()
+    val isCloudRendering by viewModel.isCloudRendering.collectAsState()
+    val isTextOnly by viewModel.isTextOnly.collectAsState()
+    val isAggressiveCaching by viewModel.isAggressiveCaching.collectAsState()
+    val isAdBlockEnabled by viewModel.isAdBlockEnabled.collectAsState()
+    val isCpuThrottleEnabled by viewModel.isCpuThrottleEnabled.collectAsState()
+    val isSmartRamCleanerEnabled by viewModel.isSmartRamCleanerEnabled.collectAsState()
     
     var showMenu by remember { mutableStateOf(false) }
+    var showRecentHistoryDialog by remember { mutableStateOf(false) }
+    var showSearchDialog by remember { mutableStateOf(false) }
+    var showQrDialog by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
+    
     var isLoading by remember { mutableStateOf(false) }
     var loadProgress by remember { mutableStateOf(0) }
     var pageTitle by remember { mutableStateOf("") }
@@ -91,11 +110,11 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     var canGoForward by remember { mutableStateOf(false) }
  
     // Intercept swipe-to-dismiss gesture to navigate WebView history backwards gracefully, or return to home
-    BackHandler(enabled = !showMenu && currentUrl != "wearbrowser://home") {
+    BackHandler(enabled = !showMenu && currentUrl != "pixelbrowser://home") {
         if (canGoBack) {
             webViewRef?.goBack()
         } else {
-            viewModel.navigateTo("wearbrowser://home")
+            viewModel.navigateTo("pixelbrowser://home")
         }
     }
 
@@ -104,7 +123,7 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
 
     // Focus WebView for Physical Rotating Crown Scrolling whenever main menu closes
     LaunchedEffect(showMenu, currentUrl) {
-        if (!showMenu && currentUrl != "wearbrowser://home") {
+        if (!showMenu && currentUrl != "pixelbrowser://home") {
             try {
                 webViewFocusRequester.requestFocus()
             } catch (e: Exception) {
@@ -113,9 +132,30 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
         }
     }
 
+    // WebView RAM Optimizer and Lifecycle Pause/Resume based on screen visibility
+    LaunchedEffect(currentUrl) {
+        if (currentUrl == "pixelbrowser://home") {
+            if (isSmartRamCleanerEnabled) {
+                try {
+                    webViewRef?.onPause()
+                    webViewRef?.destroyDrawingCache()
+                    System.gc() // Actively trigger GC to clean up Java objects
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        } else {
+            try {
+                webViewRef?.onResume()
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
     val screenState = when {
         showMenu -> ScreenState.MENU
-        currentUrl == "wearbrowser://home" -> ScreenState.HOME
+        currentUrl == "pixelbrowser://home" -> ScreenState.HOME
         else -> ScreenState.BROWSER
     }
 
@@ -185,17 +225,32 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                         },
                         onClose = { showMenu = false },
                         onToggleDeepMode = { viewModel.toggleDeepMode() },
-                        isDeepMode = isDeepMode
+                        isDeepMode = isDeepMode,
+                        isCloudRendering = isCloudRendering,
+                        onToggleCloudRendering = { viewModel.toggleCloudRendering() },
+                        isTextOnly = isTextOnly,
+                        onToggleTextOnly = { viewModel.toggleTextOnly() },
+                        isAggressiveCaching = isAggressiveCaching,
+                        onToggleAggressiveCaching = { viewModel.toggleAggressiveCaching() },
+                        isAdBlockEnabled = isAdBlockEnabled,
+                        onToggleAdBlock = { viewModel.toggleAdBlock() },
+                        isCpuThrottleEnabled = isCpuThrottleEnabled,
+                        onToggleCpuThrottle = { viewModel.toggleCpuThrottle() },
+                        isSmartRamCleanerEnabled = isSmartRamCleanerEnabled,
+                        onToggleSmartRamCleaner = { viewModel.toggleSmartRamCleaner() },
+                        onShowRecentHistory = { showRecentHistoryDialog = true }
                     )
                 }
                 ScreenState.HOME -> {
                     HomeScreen(
                         bookmarks = bookmarks,
                         history = history,
+                        recentHistory = recentHistory,
                         searchHistory = searchHistory,
                         onAddSearchHistory = { query -> viewModel.addSearchHistory(query) },
                         onDeleteSearchHistory = { id -> viewModel.removeSearchHistory(id) },
                         onClearSearchHistory = { viewModel.clearSearchHistory() },
+                        onDeleteBookmark = { url -> viewModel.removeBookmark(url) },
                         onNavigate = { url ->
                             viewModel.navigateTo(url)
                         },
@@ -205,13 +260,27 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                         onSetSearchEngine = { viewModel.setSearchEngine(it) },
                         isDeepMode = isDeepMode,
                         onToggleDeepMode = { viewModel.toggleDeepMode() },
-                        onClearHistory = { viewModel.clearHistory() }
+                        onClearHistory = { viewModel.clearHistory() },
+                        onUpdateBookmark = { viewModel.updateBookmark(it) },
+                        isCloudRendering = isCloudRendering,
+                        onToggleCloudRendering = { viewModel.toggleCloudRendering() },
+                        isTextOnly = isTextOnly,
+                        onToggleTextOnly = { viewModel.toggleTextOnly() },
+                        isAggressiveCaching = isAggressiveCaching,
+                        onToggleAggressiveCaching = { viewModel.toggleAggressiveCaching() },
+                        isAdBlockEnabled = isAdBlockEnabled,
+                        onToggleAdBlock = { viewModel.toggleAdBlock() },
+                        isCpuThrottleEnabled = isCpuThrottleEnabled,
+                        onToggleCpuThrottle = { viewModel.toggleCpuThrottle() },
+                        isSmartRamCleanerEnabled = isSmartRamCleanerEnabled,
+                        onToggleSmartRamCleaner = { viewModel.toggleSmartRamCleaner() },
+                        onShowRecentHistory = { showRecentHistoryDialog = true }
                     )
                 }
                 ScreenState.BROWSER -> {
                     val context = LocalContext.current
                     val isOffline = remember(currentUrl) {
-                        if (currentUrl != "wearbrowser://home" && !currentUrl.startsWith("file://") && !currentUrl.startsWith("about:")) {
+                        if (currentUrl != "pixelbrowser://home" && !currentUrl.startsWith("file://") && !currentUrl.startsWith("about:")) {
                             !isNetworkAvailable(context)
                         } else {
                             false
@@ -221,7 +290,7 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                     if (isOffline) {
                         OfflineScreen(
                             onDismiss = {
-                                viewModel.navigateTo("wearbrowser://home")
+                                viewModel.navigateTo("pixelbrowser://home")
                             }
                         )
                     } else {
@@ -241,6 +310,11 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                                 url = currentUrl,
                                 isPowerSaving = isPowerSavingMode,
                                 textZoom = textZoom,
+                                isCloudRendering = isCloudRendering,
+                                isTextOnly = isTextOnly,
+                                isAggressiveCaching = isAggressiveCaching,
+                                isAdBlockEnabled = isAdBlockEnabled,
+                                isCpuThrottleEnabled = isCpuThrottleEnabled,
                                 onPageStarted = {
                                     isLoading = true
                                     loadProgress = 0
@@ -257,6 +331,7 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                                     }
                                     canGoBack = webViewRef?.canGoBack() == true
                                     canGoForward = webViewRef?.canGoForward() == true
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                                 },
                                 onProgressChanged = { progress ->
                                     loadProgress = progress
@@ -329,52 +404,7 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                             }
                             
                             if (isLoading) {
-                                val infiniteTransition = rememberInfiniteTransition(label = "ProgressGlow")
-                                val pulseScale by infiniteTransition.animateFloat(
-                                    initialValue = 0.95f,
-                                    targetValue = 1.15f,
-                                    animationSpec = infiniteRepeatable(
-                                        animation = tween(1000, easing = FastOutSlowInEasing),
-                                        repeatMode = RepeatMode.Reverse
-                                    ),
-                                    label = "Pulse"
-                                )
-                                val pulseAlpha by infiniteTransition.animateFloat(
-                                    initialValue = 0.3f,
-                                    targetValue = 0.7f,
-                                    animationSpec = infiniteRepeatable(
-                                        animation = tween(1000, easing = FastOutSlowInEasing),
-                                        repeatMode = RepeatMode.Reverse
-                                    ),
-                                    label = "Alpha"
-                                )
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.Center)
-                                        .size(48.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.Center)
-                                            .size(36.dp)
-                                            .scale(pulseScale)
-                                            .alpha(pulseAlpha)
-                                            .background(
-                                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.2f),
-                                                shape = androidx.compose.foundation.shape.CircleShape
-                                            )
-                                    )
-                                    CircularProgressIndicator(
-                                        progress = { loadProgress / 100f },
-                                        modifier = Modifier.align(Alignment.Center)
-                                    )
-                                    Text(
-                                        text = "$loadProgress%",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
-                                        color = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.align(Alignment.Center)
-                                    )
-                                }
+                                LoadingOverlay(progress = loadProgress)
                             }
 
                         }
@@ -468,6 +498,31 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                 }
             }
         }
+
+        RecentHistoryDialog(
+            show = showRecentHistoryDialog,
+            onDismiss = { showRecentHistoryDialog = false },
+            recentHistory = recentHistory,
+            onNavigate = { viewModel.navigateTo(it) }
+        )
+
+        SearchDialog(
+            show = showSearchDialog,
+            onDismiss = { showSearchDialog = false },
+            searchQuery = searchQuery,
+            onSearchQueryChange = { searchQuery = it },
+            searchEngine = searchEngine,
+            searchHistory = searchHistory,
+            onAddSearchHistory = { viewModel.addSearchHistory(it) },
+            onDeleteSearchHistory = { viewModel.removeSearchHistory(it) },
+            onNavigate = { viewModel.navigateTo(it) }
+        )
+
+        QrDialog(
+            show = showQrDialog,
+            onDismiss = { showQrDialog = false },
+            currentUrl = currentUrl
+        )
     }
 }
 
@@ -477,6 +532,11 @@ fun WebViewComponent(
     url: String,
     isPowerSaving: Boolean,
     textZoom: Int,
+    isCloudRendering: Boolean,
+    isTextOnly: Boolean,
+    isAggressiveCaching: Boolean,
+    isAdBlockEnabled: Boolean,
+    isCpuThrottleEnabled: Boolean,
     onPageStarted: () -> Unit,
     onPageFinished: (String?, String?) -> Unit,
     onProgressChanged: (Int) -> Unit,
@@ -502,6 +562,217 @@ fun WebViewComponent(
 
                     override fun onPageFinished(view: WebView?, url: String?) {
                         onPageFinished(view?.title, url)
+
+                        // Apply Dynamic On-device Reader mode / Cloud-rendering simplification scripts
+                        if (isTextOnly) {
+                            view?.evaluateJavascript(
+                                """
+                                (function() {
+                                    var style = document.createElement('style');
+                                    style.innerHTML = `
+                                        * { 
+                                            animation: none !important; 
+                                            transition: none !important; 
+                                            background-image: none !important;
+                                        }
+                                        img, video, iframe, svg, canvas, .ads, .ad, .advertisement { 
+                                            display: none !important; 
+                                        }
+                                        body { 
+                                            background-color: black !important; 
+                                            color: #e0e0e0 !important; 
+                                            font-family: sans-serif !important; 
+                                            line-height: 1.5 !important; 
+                                            padding: 8px !important;
+                                        }
+                                        h1, h2, h3, h4, h5, h6 { 
+                                            color: #00ffcc !important; 
+                                            cursor: pointer !important;
+                                            border-bottom: 1px solid #333 !important;
+                                            padding-bottom: 4px !important;
+                                        }
+                                    `;
+                                    document.head.appendChild(style);
+                                    
+                                    var headers = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
+                                    headers.forEach(function(header) {
+                                        var next = header.nextElementSibling;
+                                        if (next) {
+                                            next.style.display = 'none';
+                                            header.addEventListener('click', function() {
+                                                if (next.style.display === 'none') {
+                                                    next.style.display = 'block';
+                                                } else {
+                                                    next.style.display = 'none';
+                                                }
+                                            });
+                                        }
+                                    });
+                                })();
+                                """.trimIndent(), null
+                            )
+                        } else if (isCloudRendering) {
+                            view?.evaluateJavascript(
+                                """
+                                (function() {
+                                    var style = document.createElement('style');
+                                    style.innerHTML = `
+                                        * { 
+                                            animation: none !important; 
+                                            transition: none !important; 
+                                            background-image: none !important;
+                                        }
+                                        img { 
+                                            max-width: 100% !important; 
+                                            height: auto !important; 
+                                            filter: grayscale(100%) !important; 
+                                            opacity: 0.8 !important; 
+                                        }
+                                        video, iframe, canvas, object, embed { 
+                                            display: none !important; 
+                                        }
+                                        body, div, section, article { 
+                                            float: none !important; 
+                                            position: static !important; 
+                                            width: auto !important; 
+                                            max-width: 100% !important; 
+                                            margin: 0 !important; 
+                                            padding: 4px !important; 
+                                            background: black !important;
+                                            color: white !important;
+                                        }
+                                    `;
+                                    document.head.appendChild(style);
+                                })();
+                                """.trimIndent(), null
+                            )
+                        }
+
+                        // Apply CPU Timer Throttle to preserve processor cycles
+                        if (isCpuThrottleEnabled) {
+                            view?.evaluateJavascript(
+                                """
+                                (function() {
+                                    var originalSetInterval = window.setInterval;
+                                    window.setInterval = function(fn, delay) {
+                                        if (delay < 1000) delay = 1000;
+                                        return originalSetInterval(fn, delay);
+                                    };
+                                    var originalSetTimeout = window.setTimeout;
+                                    window.setTimeout = function(fn, delay) {
+                                        if (delay < 500) delay = 500;
+                                        return originalSetTimeout(fn, delay);
+                                    };
+                                })();
+                                """.trimIndent(), null
+                            )
+                        }
+
+                        // Apply Smart Ad Blocker DOM elements cleansing script
+                        if (isAdBlockEnabled) {
+                            view?.evaluateJavascript(
+                                """
+                                (function() {
+                                    // 1. Inject Style to hide common ad layout frameworks
+                                    var style = document.createElement('style');
+                                    style.innerHTML = `
+                                        .ads, .ad, .advertisement, [id*="google_ads"], [class*="google_ads"],
+                                        [id*="ad-container"], [class*="ad-container"], [class*="adsbygoogle"],
+                                        [id*="banner"], [class*="banner-ads"], [class*="sponsor"],
+                                        .ad-box, .ad-banner, .ad-wrapper, .ad-slot, .ad-placement,
+                                        iframe[src*="doubleclick"], iframe[src*="googleads"],
+                                        div[id^="div-gpt-ad"], div[class^="ad-"], div[id^="ad-"] {
+                                            display: none !important;
+                                            visibility: hidden !important;
+                                            opacity: 0 !important;
+                                            height: 0 !important;
+                                            width: 0 !important;
+                                            pointer-events: none !important;
+                                        }
+                                    `;
+                                    document.head.appendChild(style);
+
+                                    // 2. Proactively remove iframe or div ad elements periodically or immediately
+                                    function removeAds() {
+                                        var selectors = [
+                                            'iframe[src*="doubleclick"]',
+                                            'iframe[src*="googleads"]',
+                                            '.adsbygoogle',
+                                            '[id*="google_ads"]',
+                                            '[class*="google_ads"]',
+                                            '.ad-box',
+                                            '.ad-banner',
+                                            '.ad-wrapper',
+                                            '.ad-slot',
+                                            '.ad-placement',
+                                            'div[id^="div-gpt-ad"]',
+                                            '.advertisement',
+                                            '.ads'
+                                        ];
+                                        selectors.forEach(function(selector) {
+                                            var els = document.querySelectorAll(selector);
+                                            els.forEach(function(el) {
+                                                if (el && el.parentNode) {
+                                                    el.parentNode.removeChild(el);
+                                                }
+                                            });
+                                        });
+                                    }
+                                    
+                                    removeAds();
+                                    // Run again with minor delays to catch delayed/dynamic ad script renders
+                                    setTimeout(removeAds, 500);
+                                    setTimeout(removeAds, 1500);
+                                    setTimeout(removeAds, 3500);
+                                })();
+                                """.trimIndent(), null
+                            )
+                        }
+                    }
+
+                    override fun shouldInterceptRequest(
+                        view: WebView?,
+                        request: WebResourceRequest?
+                    ): android.webkit.WebResourceResponse? {
+                        if (request != null) {
+                            val urlString = request.url.toString().lowercase()
+                            
+                            // Ad-blocking and tracking blocker
+                            if (isAdBlockEnabled) {
+                                val adKeywords = listOf(
+                                    "doubleclick", "google-analytics", "googlesyndication", "adservice", "adsense",
+                                    "adsystem", "adbraim", "adcolony", "adnxs", "advertising", "/ads/", "analytics.",
+                                    "pagead", "tracker", "telemetry", "facebook.com/tr", "scorecardresearch", "quantserve",
+                                    "popads", "popunder", "amazon-adsystem", "criteo", "pubmatic", "rubiconproject",
+                                    "outbrain", "taboola", "chartbeat", "optimizely", "mixpanel", "hotjar", "adsafeprotect",
+                                    "adform", "smartadserver", "adtech", "revcontent", "adroll", "trafficjunky", "popcash",
+                                    "mgid", "propellerads", "exoclick", "disqus", "yandex", "tracking", "pixel", "beacon",
+                                    "analytics-", "clickguard", "statcounter", "loggly", "bugsnag", "segment.io"
+                                )
+                                val isAdOrTracker = adKeywords.any { urlString.contains(it) }
+                                
+                                if (isAdOrTracker) {
+                                    return android.webkit.WebResourceResponse(
+                                        "text/plain", 
+                                        "UTF-8", 
+                                        java.io.ByteArrayInputStream("".toByteArray())
+                                    )
+                                }
+                            }
+                            
+                            // Web font blocking for text-only mode to speed up text display & save bandwidth
+                            if (isTextOnly) {
+                                val path = request.url.path?.lowercase() ?: ""
+                                if (path.endsWith(".woff") || path.endsWith(".woff2") || path.endsWith(".ttf") || path.endsWith(".otf") || urlString.contains("fonts.googleapis.com")) {
+                                    return android.webkit.WebResourceResponse(
+                                        "text/plain", 
+                                        "UTF-8", 
+                                        java.io.ByteArrayInputStream("".toByteArray())
+                                    )
+                                }
+                            }
+                        }
+                        return super.shouldInterceptRequest(view, request)
                     }
 
                     override fun shouldOverrideUrlLoading(
@@ -519,12 +790,13 @@ fun WebViewComponent(
                 }
                 
                 settings.apply {
-                    javaScriptEnabled = !isPowerSaving
+                    javaScriptEnabled = !isPowerSaving && !isTextOnly
                     domStorageEnabled = true
                     databaseEnabled = true
                     loadWithOverviewMode = true
                     useWideViewPort = true
                     allowFileAccess = true // Enable local file access to load downloaded pages
+                    loadsImagesAutomatically = !isTextOnly
                     
                     // Support zooming for better readability on tiny smartwatch screens
                     setSupportZoom(true)
@@ -534,7 +806,13 @@ fun WebViewComponent(
                     // Text auto-scaling to optimize paragraphs for tiny watch viewports
                     layoutAlgorithm = WebSettings.LayoutAlgorithm.TEXT_AUTOSIZING
                     
-                    cacheMode = if (isPowerSaving) WebSettings.LOAD_CACHE_ONLY else WebSettings.LOAD_DEFAULT
+                    cacheMode = if (isAggressiveCaching) {
+                        WebSettings.LOAD_CACHE_ELSE_NETWORK
+                    } else if (isPowerSaving) {
+                        WebSettings.LOAD_CACHE_ONLY
+                    } else {
+                        WebSettings.LOAD_DEFAULT
+                    }
                 }
                 
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -552,12 +830,19 @@ fun WebViewComponent(
             }
         },
         update = { webView ->
-            if (url != "wearbrowser://home" && !url.startsWith("wearbrowser://") && webView.url != url) {
+            if (url != "pixelbrowser://home" && !url.startsWith("pixelbrowser://") && webView.url != url) {
                 webView.loadUrl(url)
             }
             webView.settings.textZoom = textZoom
-            webView.settings.javaScriptEnabled = !isPowerSaving
-            webView.settings.cacheMode = if (isPowerSaving) WebSettings.LOAD_CACHE_ONLY else WebSettings.LOAD_DEFAULT
+            webView.settings.javaScriptEnabled = !isPowerSaving && !isTextOnly
+            webView.settings.loadsImagesAutomatically = !isTextOnly
+            webView.settings.cacheMode = if (isAggressiveCaching) {
+                WebSettings.LOAD_CACHE_ELSE_NETWORK
+            } else if (isPowerSaving) {
+                WebSettings.LOAD_CACHE_ONLY
+            } else {
+                WebSettings.LOAD_DEFAULT
+            }
             
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 try {
@@ -705,6 +990,19 @@ fun BookmarkMenu(
     onClose: () -> Unit,
     onToggleDeepMode: () -> Unit,
     isDeepMode: Boolean,
+    isCloudRendering: Boolean,
+    onToggleCloudRendering: () -> Unit,
+    isTextOnly: Boolean,
+    onToggleTextOnly: () -> Unit,
+    isAggressiveCaching: Boolean,
+    onToggleAggressiveCaching: () -> Unit,
+    isAdBlockEnabled: Boolean,
+    onToggleAdBlock: () -> Unit,
+    isCpuThrottleEnabled: Boolean,
+    onToggleCpuThrottle: () -> Unit,
+    isSmartRamCleanerEnabled: Boolean,
+    onToggleSmartRamCleaner: () -> Unit,
+    onShowRecentHistory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
@@ -767,7 +1065,7 @@ fun BookmarkMenu(
                     Card(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onNavigate("wearbrowser://home")
+                            onNavigate("pixelbrowser://home")
                         },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
                         modifier = Modifier
@@ -823,6 +1121,37 @@ fun BookmarkMenu(
                     }
                 }
 
+                // Recent History
+                item {
+                    val historyInteraction = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onShowRecentHistory()
+                        },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .expressiveScale(historyInteraction),
+                        interactionSource = historyInteraction
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.History,
+                                contentDescription = "History icon",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onSecondaryContainer
+                            )
+                            Text("Recent History", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                        }
+                    }
+                }
+                
                 // Share/Open on Phone Button
                 item {
                     val qrInteraction = remember { MutableInteractionSource() }
@@ -887,6 +1216,217 @@ fun BookmarkMenu(
                                 imageVector = if (isDeepMode) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
                                 contentDescription = "Toggle state",
                                 tint = if (isDeepMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // --- Web Performance Optimizations Category ---
+                item {
+                    ListHeader {
+                        Text("網頁效能優化", style = MaterialTheme.typography.titleSmall)
+                    }
+                }
+
+                // Cloud Rendering
+                item {
+                    val cloudInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleCloudRendering()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .expressiveScale(cloudInt),
+                        interactionSource = cloudInt,
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("雲端簡化渲染", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                                Text(if (isCloudRendering) "已啟用：剔除動畫/降載CPU" else "標準渲染模式", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(
+                                imageVector = if (isCloudRendering) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
+                                contentDescription = "Toggle state",
+                                tint = if (isCloudRendering) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Text Only / Text Folding
+                item {
+                    val textOnlyInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleTextOnly()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .expressiveScale(textOnlyInt),
+                        interactionSource = textOnlyInt,
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("純文字與折疊", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                                Text(if (isTextOnly) "已啟用：阻擋圖片/標題折疊" else "顯示完整媒體", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(
+                                imageVector = if (isTextOnly) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
+                                contentDescription = "Toggle state",
+                                tint = if (isTextOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Aggressive Caching
+                item {
+                    val cacheInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleAggressiveCaching()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .expressiveScale(cacheInt),
+                        interactionSource = cacheInt,
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("積極快取載入", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                                Text(if (isAggressiveCaching) "優先載入快取，省流極速" else "每次皆重新下載", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(
+                                imageVector = if (isAggressiveCaching) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
+                                contentDescription = "Toggle state",
+                                tint = if (isAggressiveCaching) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Smart Ad-Blocker
+                item {
+                    val adBlockInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleAdBlock()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .expressiveScale(adBlockInt),
+                        interactionSource = adBlockInt,
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("智慧廣告阻擋", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                                Text(if (isAdBlockEnabled) "已啟用：自動剔除廣告/追蹤" else "未啟用智慧阻擋", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(
+                                imageVector = if (isAdBlockEnabled) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
+                                contentDescription = "Toggle state",
+                                tint = if (isAdBlockEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // CPU Throttle
+                item {
+                    val cpuThrottleInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleCpuThrottle()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .expressiveScale(cpuThrottleInt),
+                        interactionSource = cpuThrottleInt,
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("智慧 CPU 負載抑制", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                                Text(if (isCpuThrottleEnabled) "已啟用：延緩背景計時器/省電" else "標準背景執行", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(
+                                imageVector = if (isCpuThrottleEnabled) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
+                                contentDescription = "Toggle state",
+                                tint = if (isCpuThrottleEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // Smart RAM Cleaner
+                item {
+                    val ramCleanerInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleSmartRamCleaner()
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .expressiveScale(ramCleanerInt),
+                        interactionSource = ramCleanerInt,
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("智慧記憶體清理", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                                Text(if (isSmartRamCleanerEnabled) "已啟用：返回主頁即釋放暫存" else "未啟用記憶體自動清理", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(
+                                imageVector = if (isSmartRamCleanerEnabled) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
+                                contentDescription = "Toggle state",
+                                tint = if (isSmartRamCleanerEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.size(24.dp)
                             )
                         }
@@ -1224,300 +1764,6 @@ fun BookmarkMenu(
                 }
             }
         }
-
-    // SEARCH & URL INPUT DIALOG
-    if (showSearchDialog) {
-        ExpressiveDialog(onDismissRequest = { showSearchDialog = false }) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                val searchListState = rememberScalingLazyListState()
-                val searchFocusRequester = remember { FocusRequester() }
-                
-                LaunchedEffect(Unit) {
-                    try {
-                        searchFocusRequester.requestFocus()
-                    } catch (e: Exception) {
-                        // Ignore focus request failure
-                    }
-                }
-                
-                ScalingLazyColumn(
-                    state = searchListState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .focusRequester(searchFocusRequester)
-                        .focusable()
-                        .onRotaryScrollEvent {
-                            coroutineScope.launch {
-                                searchListState.scrollBy(it.verticalScrollPixels)
-                            }
-                            true
-                        },
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    item {
-                        ListHeader {
-                            Text("Search & URL", style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
-                    
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                .background(
-                                    color = MaterialTheme.colorScheme.surfaceContainer,
-                                    shape = MaterialTheme.shapes.medium
-                                )
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            BasicTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                textStyle = TextStyle(
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = MaterialTheme.typography.bodyMedium.fontSize
-                                ),
-                                modifier = Modifier.weight(1f),
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                keyboardActions = KeyboardActions(
-                                    onSearch = {
-                                        if (searchQuery.isNotBlank()) {
-                                            onAddSearchHistory(searchQuery)
-                                            val dest = if (searchQuery.contains(".") && !searchQuery.contains(" ")) searchQuery else "https://www.google.com/search?q=${URLEncoder.encode(searchQuery, "UTF-8")}"
-                                            onNavigate(dest)
-                                            showSearchDialog = false
-                                        }
-                                    }
-                                ),
-                                decorationBox = { innerTextField ->
-                                    if (searchQuery.isEmpty()) {
-                                        Text(
-                                            "Type query...",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                                        )
-                                    }
-                                    innerTextField()
-                                }
-                            )
-                            
-                            IconButton(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    try {
-                                        val remoteInput = RemoteInput.Builder("search_query")
-                                            .setLabel("Speak URL or search")
-                                            .build()
-                                        val intent = RemoteInputIntentHelper.createActionRemoteInputIntent()
-                                        RemoteInputIntentHelper.putRemoteInputsExtra(intent, listOf(remoteInput))
-                                        speechLauncher.launch(intent)
-                                    } catch (e: Exception) {
-                                        Toast.makeText(context, "Voice input not supported", Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                modifier = Modifier.size(24.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.Mic,
-                                    contentDescription = "Voice Dictation",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-                    }
-                    
-                    item {
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
-                    
-                    if (searchQuery.isNotBlank()) {
-                        item {
-                            Button(
-                                onClick = {
-                                    onAddSearchHistory(searchQuery)
-                                    val dest = if (searchQuery.contains(".") && !searchQuery.contains(" ")) searchQuery else "https://www.google.com/search?q=${URLEncoder.encode(searchQuery, "UTF-8")}"
-                                    onNavigate(dest)
-                                    showSearchDialog = false
-                                },
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text("Go / Search Direct")
-                            }
-                        }
-                    }
-                    
-                    if (searchHistory.isNotEmpty()) {
-                        item {
-                            ListHeader {
-                                Text("最近搜尋", style = MaterialTheme.typography.titleSmall)
-                            }
-                        }
-                        items(searchHistory.take(5)) { entry ->
-                            val cardInt = remember { MutableInteractionSource() }
-                            CompactListRow(
-                                onClick = {
-                                    searchQuery = entry.query
-                                },
-                                onDelete = { onDeleteSearchHistory(entry.id) },
-                                title = entry.query,
-                                url = "點擊填入",
-                                modifier = Modifier.expressiveScale(cardInt),
-                                interactionSource = cardInt
-                            )
-                        }
-                    }
-
-                    item {
-                        ListHeader {
-                            Text("Engines")
-                        }
-                    }
-                    
-                    val engines = listOf(
-                        "Google" to "https://www.google.com/search?q=",
-                        "Wikipedia" to "https://en.wikipedia.org/w/index.php?search=",
-                        "Baidu" to "https://www.baidu.com/s?wd=",
-                        "YouTube" to "https://www.youtube.com/results?search_query="
-                    )
-                    
-                    engines.forEach { (name, baseUrl) ->
-                        item {
-                            Button(
-                                onClick = {
-                                    val q = if (searchQuery.isNotBlank()) searchQuery else "Wear OS"
-                                    onAddSearchHistory(q)
-                                    onNavigate(baseUrl + URLEncoder.encode(q, "UTF-8"))
-                                    showSearchDialog = false
-                                },
-                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                Text(if (searchQuery.isNotBlank()) "Search $name" else name, style = MaterialTheme.typography.labelSmall)
-                            }
-                        }
-                    }
-                    
-                    item {
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    
-                    item {
-                        IconButton(onClick = { showSearchDialog = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close Search")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // QR CODE DIALOG (SEND TO PHONE)
-    if (showQrDialog) {
-        ExpressiveDialog(onDismissRequest = { showQrDialog = false }) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                val qrListState = rememberScalingLazyListState()
-                val qrFocusRequester = remember { FocusRequester() }
-                
-                LaunchedEffect(Unit) {
-                    try {
-                        qrFocusRequester.requestFocus()
-                    } catch (e: Exception) {
-                        // Ignore focus request failure
-                    }
-                }
-                
-                ScalingLazyColumn(
-                    state = qrListState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .focusRequester(qrFocusRequester)
-                        .focusable()
-                        .onRotaryScrollEvent {
-                            coroutineScope.launch {
-                                qrListState.scrollBy(it.verticalScrollPixels)
-                            }
-                            true
-                        },
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    item {
-                        ListHeader {
-                            Text("Open on Phone", style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
-                    
-                    item {
-                        Text(
-                            "Scan QR with your phone to open current page",
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(horizontal = 8.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    
-                    item {
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
-                    
-                    item {
-                        Box(
-                            modifier = Modifier
-                                .size(110.dp)
-                                .background(MaterialTheme.colorScheme.background, shape = MaterialTheme.shapes.medium)
-                                .padding(8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            val encodedUrl = URLEncoder.encode(currentUrl, "UTF-8")
-                            AsyncImage(
-                                model = "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=$encodedUrl",
-                                contentDescription = "QR Code to open current page on phone",
-                                modifier = Modifier.size(94.dp)
-                            )
-                        }
-                    }
-                    
-                    item {
-                        Spacer(modifier = Modifier.height(4.dp))
-                    }
-                    
-                    item {
-                        Text(
-                            currentUrl,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 1,
-                            modifier = Modifier.padding(horizontal = 12.dp)
-                        )
-                    }
-                    
-                    item {
-                        Spacer(modifier = Modifier.height(8.dp))
-                    }
-                    
-                    item {
-                        IconButton(onClick = { showQrDialog = false }) {
-                            Icon(Icons.Default.Close, contentDescription = "Close QR")
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 @OptIn(androidx.wear.compose.material3.ExperimentalWearMaterial3Api::class)
@@ -1525,10 +1771,12 @@ fun BookmarkMenu(
 fun HomeScreen(
     bookmarks: List<com.example.data.Bookmark>,
     history: List<com.example.data.HistoryEntry>,
+    recentHistory: List<com.example.data.HistoryEntry>,
     searchHistory: List<com.example.data.SearchHistory>,
     onAddSearchHistory: (String) -> Unit,
     onDeleteSearchHistory: (Long) -> Unit,
     onClearSearchHistory: () -> Unit,
+    onDeleteBookmark: (String) -> Unit,
     onNavigate: (String) -> Unit,
     textZoom: Int,
     onSetTextZoom: (Int) -> Unit,
@@ -1536,7 +1784,21 @@ fun HomeScreen(
     onSetSearchEngine: (String) -> Unit,
     isDeepMode: Boolean,
     onToggleDeepMode: () -> Unit,
-    onClearHistory: () -> Unit
+    onClearHistory: () -> Unit,
+    onUpdateBookmark: (com.example.data.Bookmark) -> Unit,
+    isCloudRendering: Boolean,
+    onToggleCloudRendering: () -> Unit,
+    isTextOnly: Boolean,
+    onToggleTextOnly: () -> Unit,
+    isAggressiveCaching: Boolean,
+    onToggleAggressiveCaching: () -> Unit,
+    isAdBlockEnabled: Boolean,
+    onToggleAdBlock: () -> Unit,
+    isCpuThrottleEnabled: Boolean,
+    onToggleCpuThrottle: () -> Unit,
+    isSmartRamCleanerEnabled: Boolean,
+    onToggleSmartRamCleaner: () -> Unit,
+    onShowRecentHistory: () -> Unit
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -1547,6 +1809,9 @@ fun HomeScreen(
     var showSearchDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
+    var showAllBookmarksDialog by remember { mutableStateOf(false) }
+    var bookmarkToEdit by remember { mutableStateOf<com.example.data.Bookmark?>(null) }
+    var bookmarkToDelete by remember { mutableStateOf<com.example.data.Bookmark?>(null) }
 
     LaunchedEffect(Unit) {
         try {
@@ -1576,7 +1841,7 @@ fun HomeScreen(
                     ListHeader {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                             Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Text("Wear Browser", style = MaterialTheme.typography.titleMedium)
+                            Text("Pixel Browser", style = MaterialTheme.typography.titleMedium)
                         }
                     }
                 }
@@ -1701,19 +1966,63 @@ fun HomeScreen(
 
                 if (bookmarks.isNotEmpty()) {
                     item {
-                        ListHeader {
-                            Text("書籤", style = MaterialTheme.typography.titleMedium)
+                        ListHeader(
+                            modifier = Modifier.clickable {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                showAllBookmarksDialog = true
+                            }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text("書籤", style = MaterialTheme.typography.titleMedium)
+                                Icon(
+                                    imageVector = Icons.Default.ArrowForward,
+                                    contentDescription = "管理書籤",
+                                    modifier = Modifier.size(14.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                     items(bookmarks.take(3)) { bookmark ->
                         val cardInt = remember { MutableInteractionSource() }
                         CompactListRow(
                             onClick = { onNavigate(bookmark.url) },
+                            onLongClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onDeleteBookmark(bookmark.url)
+                            },
+                            onDelete = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onDeleteBookmark(bookmark.url)
+                            },
                             title = bookmark.title,
                             url = bookmark.url,
                             modifier = Modifier.expressiveScale(cardInt),
                             interactionSource = cardInt
                         )
+                    }
+
+                    if (bookmarks.size > 3) {
+                        item {
+                            val moreInt = remember { MutableInteractionSource() }
+                            Button(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    showAllBookmarksDialog = true
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                                    .expressiveScale(moreInt),
+                                interactionSource = moreInt
+                            ) {
+                                Text("顯示所有書籤 (${bookmarks.size})", style = MaterialTheme.typography.labelSmall)
+                            }
+                        }
                     }
                 }
 
@@ -1791,353 +2100,54 @@ fun HomeScreen(
             }
         }
 
-    if (showSearchDialog) {
-        ExpressiveDialog(onDismissRequest = { showSearchDialog = false }) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                val searchListState = rememberScalingLazyListState()
-                val searchFocusRequester = remember { FocusRequester() }
+    SearchDialog(
+        show = showSearchDialog,
+        onDismiss = { showSearchDialog = false },
+        searchQuery = searchQuery,
+        onSearchQueryChange = { searchQuery = it },
+        searchEngine = searchEngine,
+        searchHistory = searchHistory,
+        onAddSearchHistory = onAddSearchHistory,
+        onDeleteSearchHistory = onDeleteSearchHistory,
+        onNavigate = onNavigate
+    )
 
-                LaunchedEffect(Unit) {
-                    try {
-                        searchFocusRequester.requestFocus()
-                    } catch (e: Exception) {
-                        // Ignore focus request failure
-                    }
-                }
+    SettingsDialog(
+        show = showSettingsDialog,
+        onDismiss = { showSettingsDialog = false },
+        textZoom = textZoom,
+        onSetTextZoom = onSetTextZoom,
+        isDeepMode = isDeepMode,
+        onToggleDeepMode = onToggleDeepMode,
+        isAdBlockEnabled = isAdBlockEnabled,
+        onToggleAdBlock = onToggleAdBlock,
+        isTextOnly = isTextOnly,
+        onToggleTextOnly = onToggleTextOnly,
+        searchEngine = searchEngine,
+        onSetSearchEngine = onSetSearchEngine,
+        onClearHistory = onClearHistory
+    )
 
-                ScalingLazyColumn(
-                    state = searchListState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .focusRequester(searchFocusRequester)
-                        .focusable()
-                        .onRotaryScrollEvent {
-                            coroutineScope.launch {
-                                searchListState.scrollBy(it.verticalScrollPixels)
-                            }
-                            true
-                        },
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    item {
-                        ListHeader {
-                            Text("Search & URL", style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
+    BookmarkEditDialog(
+        bookmark = bookmarkToEdit,
+        onDismiss = { bookmarkToEdit = null },
+        onUpdateBookmark = onUpdateBookmark
+    )
 
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                .background(
-                                    color = MaterialTheme.colorScheme.surfaceContainer,
-                                    shape = MaterialTheme.shapes.medium
-                                )
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            BasicTextField(
-                                value = searchQuery,
-                                onValueChange = { searchQuery = it },
-                                textStyle = TextStyle(
-                                    color = MaterialTheme.colorScheme.onSurface,
-                                    fontSize = MaterialTheme.typography.bodyMedium.fontSize
-                                ),
-                                modifier = Modifier.weight(1f),
-                                singleLine = true,
-                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                                keyboardActions = KeyboardActions(
-                                    onSearch = {
-                                        if (searchQuery.isNotBlank()) {
-                                            onAddSearchHistory(searchQuery)
-                                            val dest = if (searchQuery.contains(".") && !searchQuery.contains(" ")) {
-                                                if (searchQuery.startsWith("http")) searchQuery else "https://$searchQuery"
-                                            } else {
-                                                val encoded = URLEncoder.encode(searchQuery, "UTF-8")
-                                                when (searchEngine) {
-                                                    "Bing" -> "https://www.bing.com/search?q=$encoded"
-                                                    "DuckDuckGo" -> "https://duckduckgo.com/?q=$encoded"
-                                                    "Baidu" -> "https://www.baidu.com/s?wd=$encoded"
-                                                    else -> "https://www.google.com/search?q=$encoded"
-                                                }
-                                            }
-                                            onNavigate(dest)
-                                            showSearchDialog = false
-                                        }
-                                    }
-                                )
-                            )
-                        }
-                    }
+    BookmarkDeleteDialog(
+        bookmark = bookmarkToDelete,
+        onDismiss = { bookmarkToDelete = null },
+        onDeleteBookmark = onDeleteBookmark
+    )
 
-                    item {
-                        Button(
-                            onClick = {
-                                if (searchQuery.isNotBlank()) {
-                                    onAddSearchHistory(searchQuery)
-                                    val dest = if (searchQuery.contains(".") && !searchQuery.contains(" ")) {
-                                        if (searchQuery.startsWith("http")) searchQuery else "https://$searchQuery"
-                                    } else {
-                                        val encoded = URLEncoder.encode(searchQuery, "UTF-8")
-                                        when (searchEngine) {
-                                            "Bing" -> "https://www.bing.com/search?q=$encoded"
-                                            "DuckDuckGo" -> "https://duckduckgo.com/?q=$encoded"
-                                            "Baidu" -> "https://www.baidu.com/s?wd=$encoded"
-                                            else -> "https://www.google.com/search?q=$encoded"
-                                        }
-                                    }
-                                    onNavigate(dest)
-                                    showSearchDialog = false
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Text("Go", color = MaterialTheme.colorScheme.onPrimary)
-                        }
-                    }
-
-                    if (searchHistory.isNotEmpty()) {
-                        item {
-                            ListHeader {
-                                Text("最近搜尋", style = MaterialTheme.typography.titleSmall)
-                            }
-                        }
-                        items(searchHistory.take(5)) { entry ->
-                            val cardInt = remember { MutableInteractionSource() }
-                            CompactListRow(
-                                onClick = {
-                                    searchQuery = entry.query
-                                },
-                                onDelete = { onDeleteSearchHistory(entry.id) },
-                                title = entry.query,
-                                url = "點擊填入",
-                                modifier = Modifier.expressiveScale(cardInt),
-                                interactionSource = cardInt
-                            )
-                        }
-                    }
-                }
-                
-                PositionIndicator(
-                    scalingLazyListState = searchListState,
-                    modifier = Modifier.align(Alignment.CenterEnd)
-                )
-            }
-        }
-    }
-
-    if (showSettingsDialog) {
-        ExpressiveDialog(onDismissRequest = { showSettingsDialog = false }) {
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MaterialTheme.colorScheme.background)
-                    .padding(8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                val settingsListState = rememberScalingLazyListState()
-                val settingsFocusRequester = remember { FocusRequester() }
-
-                LaunchedEffect(Unit) {
-                    try {
-                        settingsFocusRequester.requestFocus()
-                    } catch (e: Exception) {
-                        // Ignore
-                    }
-                }
-
-                ScalingLazyColumn(
-                    state = settingsListState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .focusRequester(settingsFocusRequester)
-                        .focusable()
-                        .onRotaryScrollEvent {
-                            coroutineScope.launch {
-                                settingsListState.scrollBy(it.verticalScrollPixels)
-                            }
-                            true
-                        },
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
-                    item {
-                        ListHeader {
-                            Text("快速設定", style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
-
-                    // 1. 字型大小 (Text Zoom)
-                    item {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
-                        ) {
-                            Text("網頁字型大小", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.SpaceEvenly,
-                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
-                            ) {
-                                val zooms = listOf(75, 100, 125, 150, 175, 200)
-                                val currentIndex = zooms.indexOf(textZoom).takeIf { it >= 0 } ?: 1
-                                Button(
-                                    onClick = { if (currentIndex > 0) onSetTextZoom(zooms[currentIndex - 1]) },
-                                    modifier = Modifier.size(36.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
-                                ) {
-                                    Icon(Icons.Default.Remove, contentDescription = "Decrease Zoom", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
-                                }
-                                Text(
-                                    "$textZoom%",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Button(
-                                    onClick = { if (currentIndex < zooms.size - 1) onSetTextZoom(zooms[currentIndex + 1]) },
-                                    modifier = Modifier.size(36.dp),
-                                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
-                                ) {
-                                    Icon(Icons.Default.Add, contentDescription = "Increase Zoom", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
-                                }
-                            }
-                        }
-                    }
-
-                    // 2. 極致純黑模式 (Deep Mode)
-                    item {
-                        val oledInt = remember { MutableInteractionSource() }
-                        Card(
-                            onClick = { onToggleDeepMode() },
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (isDeepMode) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
-                            ),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                .expressiveScale(oledInt),
-                            interactionSource = oledInt
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        "OLED 純黑省電",
-                                        color = if (isDeepMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                        style = MaterialTheme.typography.labelMedium
-                                    )
-                                    Text(
-                                        if (isDeepMode) "已啟用" else "未啟用",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = if (isDeepMode) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                                Icon(
-                                    imageVector = if (isDeepMode) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                    contentDescription = "Toggle",
-                                    tint = if (isDeepMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        }
-                    }
-
-                    // 3. 搜尋引擎 (Search Engine)
-                    item {
-                        val engineInt = remember { MutableInteractionSource() }
-                        val engines = listOf("Google", "Bing", "DuckDuckGo", "Baidu")
-                        Card(
-                            onClick = {
-                                val nextIndex = (engines.indexOf(searchEngine) + 1) % engines.size
-                                onSetSearchEngine(engines[nextIndex])
-                            },
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                .expressiveScale(engineInt),
-                            interactionSource = engineInt
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text("搜尋引擎", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
-                                Text(searchEngine, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                            }
-                        }
-                    }
-
-                    // 4. 清除瀏覽歷史 (Clear History)
-                    item {
-                        val clearInt = remember { MutableInteractionSource() }
-                        Card(
-                            onClick = {
-                                onClearHistory()
-                                Toast.makeText(context, "已清除瀏覽歷史", Toast.LENGTH_SHORT).show()
-                            },
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 4.dp, vertical = 2.dp)
-                                .expressiveScale(clearInt),
-                            interactionSource = clearInt
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.Center,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Icon(
-                                    Icons.Default.Delete,
-                                    contentDescription = "Clear",
-                                    tint = MaterialTheme.colorScheme.onErrorContainer,
-                                    modifier = Modifier.size(16.dp).padding(end = 4.dp)
-                                )
-                                Text(
-                                    "清除瀏覽歷史",
-                                    color = MaterialTheme.colorScheme.onErrorContainer,
-                                    style = MaterialTheme.typography.labelMedium
-                                )
-                            }
-                        }
-                    }
-
-                    // 5. 關閉按鈕
-                    item {
-                        val closeInt = remember { MutableInteractionSource() }
-                        Button(
-                            onClick = { showSettingsDialog = false },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 16.dp, vertical = 8.dp)
-                                .expressiveScale(closeInt),
-                            interactionSource = closeInt,
-                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                        ) {
-                            Text("完成", color = MaterialTheme.colorScheme.onPrimary)
-                        }
-                    }
-                }
-            }
-        }
-    }
+    AllBookmarksDialog(
+        show = showAllBookmarksDialog,
+        onDismiss = { showAllBookmarksDialog = false },
+        bookmarks = bookmarks,
+        onNavigate = onNavigate,
+        onEditBookmark = { bookmarkToEdit = it },
+        onDeleteBookmark = { bookmarkToDelete = it }
+    )
 }
 
 fun isNetworkAvailable(context: android.content.Context): Boolean {
@@ -2161,6 +2171,7 @@ fun isNetworkAvailable(context: android.content.Context): Boolean {
 fun OfflineScreen(
     onDismiss: () -> Unit
 ) {
+    val haptic = LocalHapticFeedback.current
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -2207,7 +2218,10 @@ fun OfflineScreen(
                 .fillMaxWidth()
         ) {
             EdgeButton(
-                onClick = onDismiss,
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onDismiss()
+                },
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFFD2E3FC),
                     contentColor = Color(0xFF001F4F)
@@ -2225,9 +2239,11 @@ fun OfflineScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun CompactListRow(
     onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
     title: String,
     url: String,
     modifier: Modifier = Modifier,
@@ -2235,73 +2251,927 @@ fun CompactListRow(
     interactionSource: MutableInteractionSource = remember { MutableInteractionSource() }
 ) {
     val haptic = LocalHapticFeedback.current
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 4.dp, vertical = 2.dp)
-            .background(MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(26.dp))
-            .clickable(
-                interactionSource = interactionSource,
-                indication = androidx.compose.foundation.LocalIndication.current,
-                onClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                    onClick()
-                }
-            )
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        // Icon
-        Box(
-            modifier = Modifier
-                .size(24.dp)
-                .background(MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(6.dp))
-                .padding(4.dp),
-            contentAlignment = Alignment.Center
-        ) {
-            AsyncImage(
-                model = "https://www.google.com/s2/favicons?sz=64&domain_url=$url",
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize()
-            )
+    val dismissState = rememberSwipeToDismissBoxState(
+        confirmValueChange = {
+            if (it == SwipeToDismissBoxValue.EndToStart) {
+                onDelete?.invoke()
+                true
+            } else {
+                false
+            }
         }
-        
-        // Text Content
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                style = MaterialTheme.typography.labelMedium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Text(
-                text = url,
-                style = MaterialTheme.typography.bodySmall,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        }
-        
-        // Optional Delete Action
-        if (onDelete != null) {
-            val deleteInt = remember { MutableInteractionSource() }
-            IconButton(
-                onClick = { onDelete() },
+    )
+
+    SwipeToDismissBox(
+        state = dismissState,
+        backgroundContent = {
+            Box(
                 modifier = Modifier
-                    .size(28.dp)
-                    .expressiveScale(deleteInt),
-                interactionSource = deleteInt
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.errorContainer)
+                    .padding(horizontal = 20.dp),
+                contentAlignment = Alignment.CenterEnd
             ) {
                 Icon(
                     imageVector = Icons.Default.Delete,
-                    contentDescription = "Delete Item",
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(16.dp)
+                    contentDescription = "刪除",
+                    tint = MaterialTheme.colorScheme.onErrorContainer
                 )
             }
+        },
+        content = {
+            Row(
+                modifier = modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
+                    .background(MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(26.dp))
+                    .combinedClickable(
+                        interactionSource = interactionSource,
+                        indication = androidx.compose.foundation.LocalIndication.current,
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onClick()
+                        },
+                        onLongClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onLongClick?.invoke()
+                        }
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                // Icon
+                Box(
+                    modifier = Modifier
+                        .size(24.dp)
+                        .background(MaterialTheme.colorScheme.surfaceContainerHigh, shape = RoundedCornerShape(6.dp))
+                        .padding(4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    AsyncImage(
+                        model = "https://www.google.com/s2/favicons?sz=64&domain_url=$url",
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+
+                // Text Content
+                Column(
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Text(
+                        text = title,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                    Text(
+                        text = url,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+            }
         }
+    )
+}
+
+@Composable
+fun SearchDialog(
+    show: Boolean,
+    onDismiss: () -> Unit,
+    searchQuery: String,
+    onSearchQueryChange: (String) -> Unit,
+    searchEngine: String,
+    searchHistory: List<SearchHistory>,
+    onAddSearchHistory: (String) -> Unit,
+    onDeleteSearchHistory: (Long) -> Unit,
+    onNavigate: (String) -> Unit
+) {
+    if (!show) return
+
+    val coroutineScope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+
+    ExpressiveDialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            val searchListState = rememberScalingLazyListState()
+            val searchFocusRequester = remember { FocusRequester() }
+
+            LaunchedEffect(Unit) {
+                try {
+                    searchFocusRequester.requestFocus()
+                } catch (e: Exception) {
+                    // Ignore focus request failure
+                }
+            }
+
+            ScalingLazyColumn(
+                state = searchListState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(searchFocusRequester)
+                    .focusable()
+                    .onRotaryScrollEvent {
+                        coroutineScope.launch {
+                            searchListState.scrollBy(it.verticalScrollPixels)
+                        }
+                        true
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                item {
+                    ListHeader {
+                        Text("搜尋與網址", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .background(
+                                color = MaterialTheme.colorScheme.surfaceContainer,
+                                shape = MaterialTheme.shapes.medium
+                            )
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        BasicTextField(
+                            value = searchQuery,
+                            onValueChange = onSearchQueryChange,
+                            textStyle = TextStyle(
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = MaterialTheme.typography.bodyMedium.fontSize
+                            ),
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                            keyboardActions = KeyboardActions(
+                                onSearch = {
+                                    if (searchQuery.isNotBlank()) {
+                                        onAddSearchHistory(searchQuery)
+                                        val dest = if (searchQuery.contains(".") && !searchQuery.contains(" ")) {
+                                            if (searchQuery.startsWith("http")) searchQuery else "https://$searchQuery"
+                                        } else {
+                                            val encoded = URLEncoder.encode(searchQuery, "UTF-8")
+                                            when (searchEngine) {
+                                                "Bing" -> "https://www.bing.com/search?q=$encoded"
+                                                "DuckDuckGo" -> "https://duckduckgo.com/?q=$encoded"
+                                                "Baidu" -> "https://www.baidu.com/s?wd=$encoded"
+                                                else -> "https://www.google.com/search?q=$encoded"
+                                            }
+                                        }
+                                        onNavigate(dest)
+                                        onDismiss()
+                                    }
+                                }
+                            )
+                        )
+                    }
+                }
+
+                item {
+                    Button(
+                        onClick = {
+                            if (searchQuery.isNotBlank()) {
+                                onAddSearchHistory(searchQuery)
+                                val dest = if (searchQuery.contains(".") && !searchQuery.contains(" ")) {
+                                    if (searchQuery.startsWith("http")) searchQuery else "https://$searchQuery"
+                                } else {
+                                    val encoded = URLEncoder.encode(searchQuery, "UTF-8")
+                                    when (searchEngine) {
+                                        "Bing" -> "https://www.bing.com/search?q=$encoded"
+                                        "DuckDuckGo" -> "https://duckduckgo.com/?q=$encoded"
+                                        "Baidu" -> "https://www.baidu.com/s?wd=$encoded"
+                                        else -> "https://www.google.com/search?q=$encoded"
+                                    }
+                                }
+                                onNavigate(dest)
+                                onDismiss()
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text("前往", color = MaterialTheme.colorScheme.onPrimary)
+                    }
+                }
+
+                if (searchHistory.isNotEmpty()) {
+                    item {
+                        ListHeader {
+                            Text("最近搜尋", style = MaterialTheme.typography.titleSmall)
+                        }
+                    }
+                    items(searchHistory.take(5)) { entry ->
+                        CompactListRow(
+                            onClick = {
+                                onSearchQueryChange(entry.query)
+                            },
+                            onDelete = { onDeleteSearchHistory(entry.id) },
+                            title = entry.query,
+                            url = entry.timestamp.toString() // Placeholder or actual time
+                        )
+                    }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                item {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "關閉")
+                    }
+                }
+            }
+            PositionIndicator(
+                scalingLazyListState = searchListState,
+                modifier = Modifier.align(Alignment.CenterEnd)
+            )
+        }
+    }
+}
+
+@Composable
+fun RecentHistoryDialog(
+    show: Boolean,
+    onDismiss: () -> Unit,
+    recentHistory: List<HistoryEntry>,
+    onNavigate: (String) -> Unit
+) {
+    if (!show) return
+
+    val haptic = LocalHapticFeedback.current
+
+    ExpressiveDialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            val historyListState = rememberScalingLazyListState()
+            ScalingLazyColumn(
+                state = historyListState,
+                modifier = Modifier.fillMaxSize(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                item {
+                    ListHeader {
+                        Text("最近瀏覽記錄", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+                if (recentHistory.isEmpty()) {
+                    item {
+                        Text("尚無瀏覽記錄", style = MaterialTheme.typography.bodySmall)
+                    }
+                } else {
+                    items(recentHistory) { entry ->
+                        CompactListRow(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onNavigate(entry.url)
+                                onDismiss()
+                            },
+                            title = entry.title,
+                            url = entry.url
+                        )
+                    }
+                }
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                item {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "關閉")
+                    }
+                }
+            }
+            PositionIndicator(
+                scalingLazyListState = historyListState,
+                modifier = Modifier.align(Alignment.CenterEnd)
+            )
+        }
+    }
+}
+
+@Composable
+fun SettingsDialog(
+    show: Boolean,
+    onDismiss: () -> Unit,
+    textZoom: Int,
+    onSetTextZoom: (Int) -> Unit,
+    isDeepMode: Boolean,
+    onToggleDeepMode: () -> Unit,
+    isAdBlockEnabled: Boolean,
+    onToggleAdBlock: () -> Unit,
+    isTextOnly: Boolean,
+    onToggleTextOnly: () -> Unit,
+    searchEngine: String,
+    onSetSearchEngine: (String) -> Unit,
+    onClearHistory: () -> Unit
+) {
+    if (!show) return
+
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val coroutineScope = rememberCoroutineScope()
+
+    ExpressiveDialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            val settingsListState = rememberScalingLazyListState()
+            val settingsFocusRequester = remember { FocusRequester() }
+
+            LaunchedEffect(Unit) {
+                try {
+                    settingsFocusRequester.requestFocus()
+                } catch (e: Exception) {
+                    // Ignore
+                }
+            }
+
+            ScalingLazyColumn(
+                state = settingsListState,
+                contentPadding = PaddingValues(top = 12.dp, start = 8.dp, end = 8.dp, bottom = 56.dp),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(settingsFocusRequester)
+                    .focusable()
+                    .onRotaryScrollEvent {
+                        coroutineScope.launch {
+                            settingsListState.scrollBy(it.verticalScrollPixels)
+                        }
+                        true
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                item {
+                    ListHeader {
+                        Text("快速設定", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+
+                // 1. 字型大小 (Text Zoom)
+                item {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)
+                    ) {
+                        Text("網頁字型大小", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                        ) {
+                            val zooms = listOf(75, 100, 125, 150, 175, 200)
+                            val currentIndex = zooms.indexOf(textZoom).takeIf { it >= 0 } ?: 1
+                            Button(
+                                onClick = { if (currentIndex > 0) onSetTextZoom(zooms[currentIndex - 1]) },
+                                modifier = Modifier.size(36.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                            ) {
+                                Icon(Icons.Default.Remove, contentDescription = "Decrease Zoom", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
+                            }
+                            Text(
+                                "$textZoom%",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Button(
+                                onClick = { if (currentIndex < zooms.size - 1) onSetTextZoom(zooms[currentIndex + 1]) },
+                                modifier = Modifier.size(36.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "Increase Zoom", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
+                            }
+                        }
+                    }
+                }
+
+                // 2. 極致純黑模式 (Deep Mode)
+                item {
+                    val oledInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = { onToggleDeepMode() },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isDeepMode) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .expressiveScale(oledInt),
+                        interactionSource = oledInt
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "OLED 純黑省電",
+                                    color = if (isDeepMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                                Text(
+                                    if (isDeepMode) "已啟用" else "未啟用",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isDeepMode) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Icon(
+                                imageVector = if (isDeepMode) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
+                                contentDescription = "Toggle",
+                                tint = if (isDeepMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // --- 智慧網頁優化 ---
+                item {
+                    ListHeader {
+                        Text("智慧網頁優化", style = MaterialTheme.typography.titleSmall)
+                    }
+                }
+
+                // 智慧廣告阻擋
+                item {
+                    val adBlockInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = { onToggleAdBlock() },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isAdBlockEnabled) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .expressiveScale(adBlockInt),
+                        interactionSource = adBlockInt
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "智慧廣告阻擋",
+                                    color = if (isAdBlockEnabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                                Text(
+                                    if (isAdBlockEnabled) "已啟用：自動剔除廣告/追蹤" else "未啟用智慧阻擋",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isAdBlockEnabled) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = if (isAdBlockEnabled) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
+                                contentDescription = "Toggle",
+                                tint = if (isAdBlockEnabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // 純文字與折疊
+                item {
+                    val textOnlyInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = { onToggleTextOnly() },
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isTextOnly) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .expressiveScale(textOnlyInt),
+                        interactionSource = textOnlyInt
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "純文字與折疊",
+                                    color = if (isTextOnly) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                    style = MaterialTheme.typography.labelMedium
+                                )
+                                Text(
+                                    if (isTextOnly) "已啟用：阻擋圖片/標題折疊" else "顯示完整媒體",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isTextOnly) MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            Icon(
+                                imageVector = if (isTextOnly) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
+                                contentDescription = "Toggle",
+                                tint = if (isTextOnly) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    }
+                }
+
+                // 3. 搜尋引擎 (Search Engine)
+                item {
+                    val engineInt = remember { MutableInteractionSource() }
+                    val engines = listOf("Google", "Bing", "DuckDuckGo", "Baidu")
+                    Card(
+                        onClick = {
+                            val nextIndex = (engines.indexOf(searchEngine) + 1) % engines.size
+                            onSetSearchEngine(engines[nextIndex])
+                        },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .expressiveScale(engineInt),
+                        interactionSource = engineInt
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text("搜尋引擎", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                            Text(searchEngine, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                    }
+                }
+
+                // 4. 清除瀏覽歷史 (Clear History)
+                item {
+                    val clearInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            onClearHistory()
+                            Toast.makeText(context, "已清除瀏覽歷史", Toast.LENGTH_SHORT).show()
+                        },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                            .expressiveScale(clearInt),
+                        interactionSource = clearInt
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Delete,
+                                contentDescription = "Clear",
+                                tint = MaterialTheme.colorScheme.onErrorContainer,
+                                modifier = Modifier.size(16.dp).padding(end = 4.dp)
+                            )
+                            Text(
+                                "清除瀏覽歷史",
+                                color = MaterialTheme.colorScheme.onErrorContainer,
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
+                }
+            }
+
+            // EdgeButton 關閉/完成按鈕，打勾
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+            ) {
+                EdgeButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onDismiss()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary
+                    ),
+                    modifier = Modifier.align(Alignment.BottomCenter)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Done",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun BookmarkEditDialog(
+    bookmark: Bookmark?,
+    onDismiss: () -> Unit,
+    onUpdateBookmark: (Bookmark) -> Unit
+) {
+    if (bookmark == null) return
+
+    ExpressiveDialog(onDismissRequest = onDismiss) {
+        var newTitle by remember(bookmark) { mutableStateOf(bookmark.title) }
+        var newUrl by remember(bookmark) { mutableStateOf(bookmark.url) }
+
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("編輯書籤", style = MaterialTheme.typography.titleSmall)
+            androidx.compose.material3.TextField(value = newTitle, onValueChange = { newTitle = it }, label = { Text("名稱") })
+            androidx.compose.material3.TextField(value = newUrl, onValueChange = { newUrl = it }, label = { Text("網址") })
+            Button(onClick = {
+                onUpdateBookmark(bookmark.copy(title = newTitle, url = newUrl))
+                onDismiss()
+            }) {
+                Text("儲存")
+            }
+        }
+    }
+}
+
+@Composable
+fun BookmarkDeleteDialog(
+    bookmark: Bookmark?,
+    onDismiss: () -> Unit,
+    onDeleteBookmark: (String) -> Unit
+) {
+    if (bookmark == null) return
+
+    ExpressiveDialog(onDismissRequest = onDismiss) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text("確定刪除此書籤?", style = MaterialTheme.typography.titleSmall)
+            Row {
+                Button(onClick = {
+                    onDeleteBookmark(bookmark.url)
+                    onDismiss()
+                }) {
+                    Text("刪除")
+                }
+                Button(onClick = onDismiss) {
+                    Text("取消")
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun AllBookmarksDialog(
+    show: Boolean,
+    onDismiss: () -> Unit,
+    bookmarks: List<Bookmark>,
+    onNavigate: (String) -> Unit,
+    onEditBookmark: (Bookmark) -> Unit,
+    onDeleteBookmark: (Bookmark) -> Unit
+) {
+    if (!show) return
+
+    val haptic = LocalHapticFeedback.current
+    val coroutineScope = rememberCoroutineScope()
+
+    ExpressiveDialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            val bookmarkListState = rememberScalingLazyListState()
+            val bookmarkFocusRequester = remember { FocusRequester() }
+
+            LaunchedEffect(Unit) {
+                try {
+                    bookmarkFocusRequester.requestFocus()
+                } catch (e: Exception) {
+                    // Ignore focus request failure
+                }
+            }
+
+            ScalingLazyColumn(
+                state = bookmarkListState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(bookmarkFocusRequester)
+                    .focusable()
+                    .onRotaryScrollEvent {
+                        coroutineScope.launch {
+                            bookmarkListState.scrollBy(it.verticalScrollPixels)
+                        }
+                        true
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                item {
+                    ListHeader {
+                        Text("我的書籤", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+
+                if (bookmarks.isEmpty()) {
+                    item {
+                        Text("尚無書籤", style = MaterialTheme.typography.bodySmall)
+                    }
+                } else {
+                    items(bookmarks) { bookmark ->
+                        CompactListRow(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onNavigate(bookmark.url)
+                                onDismiss()
+                            },
+                            onLongClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onEditBookmark(bookmark)
+                            },
+                            onDelete = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onDeleteBookmark(bookmark)
+                            },
+                            title = bookmark.title,
+                            url = bookmark.url
+                        )
+                    }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                item {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "關閉")
+                    }
+                }
+            }
+            PositionIndicator(
+                scalingLazyListState = bookmarkListState,
+                modifier = Modifier.align(Alignment.CenterEnd)
+            )
+        }
+    }
+}
+
+@Composable
+fun QrDialog(
+    show: Boolean,
+    onDismiss: () -> Unit,
+    currentUrl: String
+) {
+    if (!show) return
+
+    val coroutineScope = rememberCoroutineScope()
+
+    ExpressiveDialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            val qrListState = rememberScalingLazyListState()
+            val qrFocusRequester = remember { FocusRequester() }
+            
+            LaunchedEffect(Unit) {
+                try {
+                    qrFocusRequester.requestFocus()
+                } catch (e: Exception) {
+                    // Ignore focus request failure
+                }
+            }
+            
+            ScalingLazyColumn(
+                state = qrListState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(qrFocusRequester)
+                    .focusable()
+                    .onRotaryScrollEvent {
+                        coroutineScope.launch {
+                            qrListState.scrollBy(it.verticalScrollPixels)
+                        }
+                        true
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                item {
+                    ListHeader {
+                        Text("Open on Phone", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+                
+                item {
+                    Text(
+                        "Scan QR with your phone to open current page",
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 8.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                
+                item {
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                
+                item {
+                    Box(
+                        modifier = Modifier
+                            .size(110.dp)
+                            .background(MaterialTheme.colorScheme.background, shape = MaterialTheme.shapes.medium)
+                            .padding(8.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        val encodedUrl = java.net.URLEncoder.encode(currentUrl, "UTF-8")
+                        AsyncImage(
+                            model = "https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=$encodedUrl",
+                            contentDescription = "QR Code to open current page on phone",
+                            modifier = Modifier.size(94.dp)
+                        )
+                    }
+                }
+                
+                item {
+                    Spacer(modifier = Modifier.height(4.dp))
+                }
+                
+                item {
+                    Text(
+                        currentUrl,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                }
+                
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+                
+                item {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "Close QR")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun LoadingOverlay(progress: Int) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.8f)),
+        contentAlignment = Alignment.Center
+    ) {
+        // Full screen progress indicator
+        CircularProgressIndicator(
+            progress = { progress / 100f },
+            modifier = Modifier.fillMaxSize(),
+            strokeWidth = 4.dp
+        )
+
+        Text(
+            text = "$progress%",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.primary
+        )
     }
 }

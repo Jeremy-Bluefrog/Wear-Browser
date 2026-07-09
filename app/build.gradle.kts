@@ -15,7 +15,7 @@ android {
 
   defaultConfig {
     applicationId = "com.aistudio.wearbrowser.zvpxkl"
-    minSdk = 26
+    minSdk = 35
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
