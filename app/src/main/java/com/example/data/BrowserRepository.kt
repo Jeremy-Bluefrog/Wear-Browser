@@ -7,7 +7,6 @@ class BrowserRepository(private val dao: BrowserDao) {
     val cachedPages: Flow<List<CachedPage>> = dao.getAllCachedPages()
     val downloadedFiles: Flow<List<DownloadedFile>> = dao.getAllDownloadedFiles()
     val history: Flow<List<HistoryEntry>> = dao.getAllHistory()
-    val recentHistory: Flow<List<HistoryEntry>> = dao.getRecentHistory()
     val searchHistory: Flow<List<SearchHistory>> = dao.getAllSearchHistory()
 
     suspend fun addBookmark(url: String, title: String) {

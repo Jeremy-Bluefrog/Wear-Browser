@@ -45,6 +45,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -54,6 +55,8 @@ import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -63,7 +66,6 @@ import androidx.wear.compose.material3.*
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
-import androidx.wear.compose.material3.*
 import androidx.wear.compose.material.PositionIndicator
 import androidx.compose.ui.draw.clip
 import com.example.data.*
@@ -72,7 +74,7 @@ import kotlinx.coroutines.launch
 import java.net.URLEncoder
 
 enum class ScreenState {
-    MENU, HOME, BROWSER
+    MENU, HOME, BROWSER, HISTORY
 }
 
 @Composable
@@ -84,11 +86,9 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     val bookmarks by viewModel.bookmarks.collectAsState()
     val downloadedFiles by viewModel.downloadedFiles.collectAsState()
     val history by viewModel.history.collectAsState()
-    val recentHistory by viewModel.recentHistory.collectAsState()
     val searchHistory by viewModel.searchHistory.collectAsState()
     val textZoom by viewModel.textZoom.collectAsState()
     val isSpeaking by viewModel.isSpeaking.collectAsState()
-    val searchEngine by viewModel.searchEngine.collectAsState()
     val isCloudRendering by viewModel.isCloudRendering.collectAsState()
     val isTextOnly by viewModel.isTextOnly.collectAsState()
     val isAggressiveCaching by viewModel.isAggressiveCaching.collectAsState()
@@ -97,7 +97,7 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     val isSmartRamCleanerEnabled by viewModel.isSmartRamCleanerEnabled.collectAsState()
     
     var showMenu by remember { mutableStateOf(false) }
-    var showRecentHistoryDialog by remember { mutableStateOf(false) }
+    var isIncognito by remember { mutableStateOf(false) }
     var showSearchDialog by remember { mutableStateOf(false) }
     var showQrDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
@@ -156,16 +156,39 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     val screenState = when {
         showMenu -> ScreenState.MENU
         currentUrl == "pixelbrowser://home" -> ScreenState.HOME
+        currentUrl == "pixelbrowser://history" -> ScreenState.HISTORY
         else -> ScreenState.BROWSER
     }
 
+    val finalHistory = if (isIncognito) emptyList() else history
+    val finalSearchHistory = if (isIncognito) emptyList() else searchHistory
+
     AppScaffold {
-        Box(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
             AnimatedContent(
                 targetState = screenState,
                 transitionSpec = {
-                    fadeIn(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow)) togetherWith
-                    fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+                    val enterTransition = when {
+                        initialState == ScreenState.HOME && targetState == ScreenState.HISTORY -> {
+                            slideInHorizontally(initialOffsetX = { it }) + fadeIn()
+                        }
+                        initialState == ScreenState.HISTORY && targetState == ScreenState.HOME -> {
+                            slideInHorizontally(initialOffsetX = { -it }) + fadeIn()
+                        }
+                        else -> fadeIn(animationSpec = spring(dampingRatio = Spring.DampingRatioLowBouncy, stiffness = Spring.StiffnessMediumLow))
+                    }
+
+                    val exitTransition = when {
+                        initialState == ScreenState.HOME && targetState == ScreenState.HISTORY -> {
+                            slideOutHorizontally(targetOffsetX = { -it / 2 }) + fadeOut()
+                        }
+                        initialState == ScreenState.HISTORY && targetState == ScreenState.HOME -> {
+                            slideOutHorizontally(targetOffsetX = { it / 2 }) + fadeOut()
+                        }
+                        else -> fadeOut(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+                    }
+
+                    enterTransition togetherWith exitTransition
                 },
                 label = "ScreenTransition",
                 modifier = Modifier.fillMaxSize()
@@ -175,8 +198,8 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                     BookmarkMenu(
                         bookmarks = bookmarks,
                         downloadedFiles = downloadedFiles,
-                        history = history,
-                        searchHistory = searchHistory,
+                        history = finalHistory,
+                        searchHistory = finalSearchHistory,
                         onAddSearchHistory = { query -> viewModel.addSearchHistory(query) },
                         onDeleteSearchHistory = { id -> viewModel.removeSearchHistory(id) },
                         onClearSearchHistory = { viewModel.clearSearchHistory() },
@@ -237,16 +260,14 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                         isCpuThrottleEnabled = isCpuThrottleEnabled,
                         onToggleCpuThrottle = { viewModel.toggleCpuThrottle() },
                         isSmartRamCleanerEnabled = isSmartRamCleanerEnabled,
-                        onToggleSmartRamCleaner = { viewModel.toggleSmartRamCleaner() },
-                        onShowRecentHistory = { showRecentHistoryDialog = true }
+                        onToggleSmartRamCleaner = { viewModel.toggleSmartRamCleaner() }
                     )
                 }
                 ScreenState.HOME -> {
                     HomeScreen(
                         bookmarks = bookmarks,
-                        history = history,
-                        recentHistory = recentHistory,
-                        searchHistory = searchHistory,
+                        history = finalHistory,
+                        searchHistory = finalSearchHistory,
                         onAddSearchHistory = { query -> viewModel.addSearchHistory(query) },
                         onDeleteSearchHistory = { id -> viewModel.removeSearchHistory(id) },
                         onClearSearchHistory = { viewModel.clearSearchHistory() },
@@ -256,8 +277,6 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                         },
                         textZoom = textZoom,
                         onSetTextZoom = { viewModel.setTextZoom(it) },
-                        searchEngine = searchEngine,
-                        onSetSearchEngine = { viewModel.setSearchEngine(it) },
                         isDeepMode = isDeepMode,
                         onToggleDeepMode = { viewModel.toggleDeepMode() },
                         onClearHistory = { viewModel.clearHistory() },
@@ -274,7 +293,20 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                         onToggleCpuThrottle = { viewModel.toggleCpuThrottle() },
                         isSmartRamCleanerEnabled = isSmartRamCleanerEnabled,
                         onToggleSmartRamCleaner = { viewModel.toggleSmartRamCleaner() },
-                        onShowRecentHistory = { showRecentHistoryDialog = true }
+                        isIncognito = isIncognito,
+                        onToggleIncognito = { isIncognito = !isIncognito }
+                    )
+                }
+                ScreenState.HISTORY -> {
+                    HistoryScreen(
+                        history = history,
+                        searchHistory = searchHistory,
+                        onNavigate = { url -> viewModel.navigateTo(url) },
+                        onDeleteHistoryEntry = { id -> viewModel.deleteHistoryEntry(id) },
+                        onDeleteSearchHistory = { id -> viewModel.removeSearchHistory(id) },
+                        onClearHistory = { viewModel.clearHistory() },
+                        onAddSearchHistory = { query -> viewModel.addSearchHistory(query) },
+                        onBack = { viewModel.navigateTo("pixelbrowser://home") }
                     )
                 }
                 ScreenState.BROWSER -> {
@@ -294,6 +326,10 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                             }
                         )
                     } else {
+                        var leftDragOffset by remember { mutableStateOf(0f) }
+                        var rightDragOffset by remember { mutableStateOf(0f) }
+                        val dragThresholdPx = with(androidx.compose.ui.platform.LocalDensity.current) { 50.dp.toPx() }
+
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
@@ -403,8 +439,124 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                                 }
                             }
                             
-                            if (isLoading) {
-                                LoadingOverlay(progress = loadProgress)
+                            DeferredLoadingProgress(
+                                isLoadingProvider = { isLoading },
+                                progressProvider = { loadProgress }
+                            )
+
+                            // Left Edge (Swipe Right to Go Back / Go Home)
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .fillMaxHeight()
+                                    .width(28.dp)
+                                    .pointerInput(currentUrl, canGoBack) {
+                                        if (currentUrl == "pixelbrowser://home") return@pointerInput
+                                        detectHorizontalDragGestures(
+                                            onDragStart = { leftDragOffset = 0f },
+                                            onDragEnd = {
+                                                if (leftDragOffset > dragThresholdPx) {
+                                                    if (canGoBack) {
+                                                        webViewRef?.goBack()
+                                                    } else {
+                                                        viewModel.navigateTo("pixelbrowser://home")
+                                                    }
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                }
+                                                leftDragOffset = 0f
+                                            },
+                                            onDragCancel = { leftDragOffset = 0f },
+                                            onHorizontalDrag = { _, dragAmount ->
+                                                leftDragOffset = (leftDragOffset + dragAmount).coerceAtLeast(0f)
+                                            }
+                                        )
+                                    }
+                            )
+
+                            // Right Edge (Swipe Left to Go Forward)
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.CenterEnd)
+                                    .fillMaxHeight()
+                                    .width(28.dp)
+                                    .pointerInput(canGoForward) {
+                                        if (!canGoForward) return@pointerInput
+                                        detectHorizontalDragGestures(
+                                            onDragStart = { rightDragOffset = 0f },
+                                            onDragEnd = {
+                                                if (rightDragOffset < -dragThresholdPx) {
+                                                    webViewRef?.goForward()
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                }
+                                                rightDragOffset = 0f
+                                            },
+                                            onDragCancel = { rightDragOffset = 0f },
+                                            onHorizontalDrag = { _, dragAmount ->
+                                                rightDragOffset = (rightDragOffset + dragAmount).coerceAtMost(0f)
+                                            }
+                                        )
+                                    }
+                            )
+
+                            // Visual back gesture indicator
+                            if (leftDragOffset > 0f) {
+                                val progress = (leftDragOffset / dragThresholdPx).coerceIn(0f, 1.2f)
+                                val isTriggered = leftDragOffset >= dragThresholdPx
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.CenterStart)
+                                        .graphicsLayer {
+                                            translationX = (-40.dp.toPx() + (leftDragOffset * 0.6f)).coerceAtMost(16.dp.toPx())
+                                            alpha = progress.coerceIn(0f, 1f)
+                                            scaleX = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
+                                            scaleY = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
+                                        }
+                                        .background(
+                                            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f),
+                                            shape = androidx.compose.foundation.shape.CircleShape
+                                        )
+                                        .size(40.dp)
+                                        .padding(8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowBack,
+                                        contentDescription = "返回",
+                                        tint = if (isTriggered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+
+                            // Visual forward gesture indicator
+                            if (rightDragOffset < 0f) {
+                                val rightDragAbs = -rightDragOffset
+                                val progress = (rightDragAbs / dragThresholdPx).coerceIn(0f, 1.2f)
+                                val isTriggered = rightDragAbs >= dragThresholdPx
+                                Box(
+                                    modifier = Modifier
+                                        .align(Alignment.CenterEnd)
+                                        .graphicsLayer {
+                                            translationX = (40.dp.toPx() + (rightDragOffset * 0.6f)).coerceAtLeast(-16.dp.toPx())
+                                            alpha = progress.coerceIn(0f, 1f)
+                                            scaleX = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
+                                            scaleY = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
+                                        }
+                                        .background(
+                                            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f),
+                                            shape = androidx.compose.foundation.shape.CircleShape
+                                        )
+                                        .size(40.dp)
+                                        .padding(8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.ArrowForward,
+                                        contentDescription = "前進",
+                                        tint = if (isTriggered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
                             }
 
                         }
@@ -499,19 +651,12 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
             }
         }
 
-        RecentHistoryDialog(
-            show = showRecentHistoryDialog,
-            onDismiss = { showRecentHistoryDialog = false },
-            recentHistory = recentHistory,
-            onNavigate = { viewModel.navigateTo(it) }
-        )
 
         SearchDialog(
             show = showSearchDialog,
             onDismiss = { showSearchDialog = false },
             searchQuery = searchQuery,
             onSearchQueryChange = { searchQuery = it },
-            searchEngine = searchEngine,
             searchHistory = searchHistory,
             onAddSearchHistory = { viewModel.addSearchHistory(it) },
             onDeleteSearchHistory = { viewModel.removeSearchHistory(it) },
@@ -957,6 +1102,7 @@ fun ExpressiveDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
                 .scale(scale)
                 .alpha(dialogAlpha),
             contentAlignment = Alignment.Center
@@ -1002,7 +1148,6 @@ fun BookmarkMenu(
     onToggleCpuThrottle: () -> Unit,
     isSmartRamCleanerEnabled: Boolean,
     onToggleSmartRamCleaner: () -> Unit,
-    onShowRecentHistory: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val haptic = LocalHapticFeedback.current
@@ -1011,22 +1156,35 @@ fun BookmarkMenu(
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
+    var showSearchMethodDialog by remember { mutableStateOf(false) }
     var showSearchDialog by remember { mutableStateOf(false) }
     var showQrDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showTranslateMenu by remember { mutableStateOf(false) }
 
-    val speechLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
+    val voiceLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        if (result.resultCode == android.app.Activity.RESULT_OK && result.data != null) {
-            val results = RemoteInput.getResultsFromIntent(result.data)
-            val spokenText = results?.getCharSequence("search_query")?.toString()
-            if (!spokenText.isNullOrBlank()) {
-                searchQuery = spokenText
-                showSearchDialog = true
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val spokenText = result.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.get(0)
+            if (!spokenText.isNullOrEmpty()) {
+                onNavigate(if (spokenText.contains(".") && !spokenText.contains(" ")) {
+                    if (spokenText.startsWith("http")) spokenText else "https://$spokenText"
+                } else {
+                    val encoded = java.net.URLEncoder.encode(spokenText, "UTF-8")
+                    "https://www.google.com/search?q=$encoded"
+                })
+                onClose()
             }
         }
+    }
+
+    fun startVoiceSearch() {
+        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "請說出搜尋內容")
+        }
+        voiceLauncher.launch(intent)
     }
 
     // Check if current URL is a translatable web page (http/https and not local/blank files)
@@ -1056,7 +1214,7 @@ fun BookmarkMenu(
             ) {
                 item {
                     ListHeader {
-                        Text("Navigation")
+                        Text("功能導航", style = MaterialTheme.typography.titleMedium)
                     }
                 }
 
@@ -1081,11 +1239,46 @@ fun BookmarkMenu(
                         ) {
                             Icon(
                                 Icons.Default.Home,
-                                contentDescription = "Home icon",
+                                contentDescription = "首頁圖標",
                                 modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.onSecondaryContainer
                             )
-                            Text("Home", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                            Text("首頁", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                        }
+                    }
+                }
+
+                // Share to Phone
+                item {
+                    val shareInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_TEXT, currentUrl)
+                            }
+                            context.startActivity(android.content.Intent.createChooser(intent, "分享至手機"))
+                        },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .expressiveScale(shareInt),
+                        interactionSource = shareInt
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Share,
+                                contentDescription = "分享圖標",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer
+                            )
+                            Text("分享至手機", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
                         }
                     }
                 }
@@ -1096,7 +1289,7 @@ fun BookmarkMenu(
                     Card(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            showSearchDialog = true
+                            showSearchMethodDialog = true
                         },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                         modifier = Modifier
@@ -1112,22 +1305,22 @@ fun BookmarkMenu(
                         ) {
                             Icon(
                                 Icons.Default.Search,
-                                contentDescription = "Search icon",
+                                contentDescription = "搜尋圖標",
                                 modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.onPrimaryContainer
                             )
-                            Text("Search or Enter URL", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Text("搜尋或輸入網址", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                     }
                 }
 
-                // Recent History
+                // History
                 item {
                     val historyInteraction = remember { MutableInteractionSource() }
                     Card(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onShowRecentHistory()
+                            onNavigate("pixelbrowser://history")
                         },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
                         modifier = Modifier
@@ -1143,16 +1336,16 @@ fun BookmarkMenu(
                         ) {
                             Icon(
                                 Icons.Default.History,
-                                contentDescription = "History icon",
+                                contentDescription = "歷史圖標",
                                 modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.onSecondaryContainer
                             )
-                            Text("Recent History", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                            Text("瀏覽與搜尋紀錄", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSecondaryContainer)
                         }
                     }
                 }
                 
-                // Share/Open on Phone Button
+                // Share/Open on Phone Button (QR Code)
                 item {
                     val qrInteraction = remember { MutableInteractionSource() }
                     Card(
@@ -1173,19 +1366,19 @@ fun BookmarkMenu(
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
                             Icon(
-                                Icons.Default.PhoneAndroid,
-                                contentDescription = "Phone icon",
+                                Icons.Default.QrCode,
+                                contentDescription = "QR 碼圖標",
                                 modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.onTertiaryContainer
                             )
-                            Text("Open on Phone", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                            Text("手機同步 (QR 碼)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
                         }
                     }
                 }
 
                 item {
                     ListHeader {
-                        Text("Settings")
+                        Text("瀏覽器設定", style = MaterialTheme.typography.titleMedium)
                     }
                 }
                 
@@ -1209,19 +1402,17 @@ fun BookmarkMenu(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("OLED Black Mode", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
-                                Text(if (isDeepMode) "Pure black background" else "Standard dark theme", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("OLED 純黑模式", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                                Text(if (isDeepMode) "極致省電純黑背景" else "標準深色主題", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Icon(
                                 imageVector = if (isDeepMode) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                contentDescription = "Toggle state",
-                                tint = if (isDeepMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
-                                modifier = Modifier.size(24.dp)
+                                contentDescription = "開關狀態",
+                                tint = if (isDeepMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
                     }
                 }
-
                 // --- Web Performance Optimizations Category ---
                 item {
                     ListHeader {
@@ -1255,7 +1446,7 @@ fun BookmarkMenu(
                             }
                             Icon(
                                 imageVector = if (isCloudRendering) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                contentDescription = "Toggle state",
+                                contentDescription = "開關狀態",
                                 tint = if (isCloudRendering) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.size(24.dp)
                             )
@@ -1289,7 +1480,7 @@ fun BookmarkMenu(
                             }
                             Icon(
                                 imageVector = if (isTextOnly) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                contentDescription = "Toggle state",
+                                contentDescription = "開關狀態",
                                 tint = if (isTextOnly) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.size(24.dp)
                             )
@@ -1323,7 +1514,7 @@ fun BookmarkMenu(
                             }
                             Icon(
                                 imageVector = if (isAggressiveCaching) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                contentDescription = "Toggle state",
+                                contentDescription = "開關狀態",
                                 tint = if (isAggressiveCaching) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.size(24.dp)
                             )
@@ -1357,7 +1548,7 @@ fun BookmarkMenu(
                             }
                             Icon(
                                 imageVector = if (isAdBlockEnabled) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                contentDescription = "Toggle state",
+                                contentDescription = "開關狀態",
                                 tint = if (isAdBlockEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.size(24.dp)
                             )
@@ -1391,7 +1582,7 @@ fun BookmarkMenu(
                             }
                             Icon(
                                 imageVector = if (isCpuThrottleEnabled) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                contentDescription = "Toggle state",
+                                contentDescription = "開關狀態",
                                 tint = if (isCpuThrottleEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.size(24.dp)
                             )
@@ -1425,7 +1616,7 @@ fun BookmarkMenu(
                             }
                             Icon(
                                 imageVector = if (isSmartRamCleanerEnabled) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                contentDescription = "Toggle state",
+                                contentDescription = "開關狀態",
                                 tint = if (isSmartRamCleanerEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                                 modifier = Modifier.size(24.dp)
                             )
@@ -1453,15 +1644,15 @@ fun BookmarkMenu(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
-                                Text("Listen to Page", style = MaterialTheme.typography.labelMedium, color = if (isSpeaking) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer)
-                                Text(if (isSpeaking) "Reading aloud..." else "Text-to-speech reader", style = MaterialTheme.typography.bodySmall, color = if (isSpeaking) MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
+                                Text("語音朗讀網頁", style = MaterialTheme.typography.labelMedium, color = if (isSpeaking) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onPrimaryContainer)
+                                Text(if (isSpeaking) "正為您朗讀中..." else "智慧 TTS 語音朗讀器", style = MaterialTheme.typography.bodySmall, color = if (isSpeaking) MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.8f) else MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f))
                             }
                             if (isSpeaking) {
                                 ExpressiveVoiceWave(modifier = Modifier.padding(end = 4.dp))
                             } else {
                                 Icon(
                                     imageVector = Icons.Default.VolumeUp,
-                                    contentDescription = "Read Aloud icon",
+                                    contentDescription = "朗讀圖標",
                                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                                     modifier = Modifier.size(24.dp)
                                 )
@@ -1535,7 +1726,7 @@ fun BookmarkMenu(
                 if (isTranslatable) {
                     item {
                         ListHeader {
-                            Text("Translate Page")
+                            Text("網頁翻譯", style = MaterialTheme.typography.titleMedium)
                         }
                     }
 
@@ -1613,13 +1804,13 @@ fun BookmarkMenu(
 
                 item {
                     ListHeader {
-                        Text("Bookmarks")
+                        Text("我的書籤", style = MaterialTheme.typography.titleMedium)
                     }
                 }
 
                 if (bookmarks.isEmpty()) {
                     item {
-                        Text("No bookmarks", style = MaterialTheme.typography.bodySmall)
+                        Text("尚無書籤", style = MaterialTheme.typography.bodySmall)
                     }
                 }
 
@@ -1637,13 +1828,13 @@ fun BookmarkMenu(
 
                 item {
                     ListHeader {
-                        Text("Downloads")
+                        Text("下載項目", style = MaterialTheme.typography.titleMedium)
                     }
                 }
 
                 if (downloadedFiles.isEmpty()) {
                     item {
-                        Text("No downloaded files", style = MaterialTheme.typography.bodySmall)
+                        Text("尚無下載檔案", style = MaterialTheme.typography.bodySmall)
                     }
                 }
 
@@ -1668,7 +1859,7 @@ fun BookmarkMenu(
                             ) {
                                 Icon(
                                     Icons.Default.Delete,
-                                    contentDescription = "Delete File",
+                                    contentDescription = "刪除檔案",
                                     tint = MaterialTheme.colorScheme.error,
                                     modifier = Modifier.size(16.dp)
                                 )
@@ -1759,10 +1950,31 @@ fun BookmarkMenu(
                 
                 item {
                     IconButton(onClick = onClose) {
-                        Icon(Icons.Default.Close, contentDescription = "Close")
+                        Icon(Icons.Default.Close, contentDescription = "關閉")
                     }
                 }
             }
+
+            SearchMethodDialog(
+                show = showSearchMethodDialog,
+                onDismiss = { showSearchMethodDialog = false },
+                onVoiceSearch = { startVoiceSearch() },
+                onKeyboardSearch = { showSearchDialog = true }
+            )
+
+            SearchDialog(
+                show = showSearchDialog,
+                onDismiss = { showSearchDialog = false },
+                searchQuery = searchQuery,
+                onSearchQueryChange = { searchQuery = it },
+                searchHistory = searchHistory,
+                onAddSearchHistory = onAddSearchHistory,
+                onDeleteSearchHistory = onDeleteSearchHistory,
+                onNavigate = { url ->
+                    onNavigate(url)
+                    onClose()
+                }
+            )
         }
 }
 
@@ -1771,7 +1983,6 @@ fun BookmarkMenu(
 fun HomeScreen(
     bookmarks: List<com.example.data.Bookmark>,
     history: List<com.example.data.HistoryEntry>,
-    recentHistory: List<com.example.data.HistoryEntry>,
     searchHistory: List<com.example.data.SearchHistory>,
     onAddSearchHistory: (String) -> Unit,
     onDeleteSearchHistory: (Long) -> Unit,
@@ -1780,8 +1991,6 @@ fun HomeScreen(
     onNavigate: (String) -> Unit,
     textZoom: Int,
     onSetTextZoom: (Int) -> Unit,
-    searchEngine: String,
-    onSetSearchEngine: (String) -> Unit,
     isDeepMode: Boolean,
     onToggleDeepMode: () -> Unit,
     onClearHistory: () -> Unit,
@@ -1798,7 +2007,8 @@ fun HomeScreen(
     onToggleCpuThrottle: () -> Unit,
     isSmartRamCleanerEnabled: Boolean,
     onToggleSmartRamCleaner: () -> Unit,
-    onShowRecentHistory: () -> Unit
+    isIncognito: Boolean,
+    onToggleIncognito: () -> Unit
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
@@ -1806,12 +2016,40 @@ fun HomeScreen(
     val focusRequester = remember { FocusRequester() }
     val coroutineScope = rememberCoroutineScope()
 
+    var showSearchMethodDialog by remember { mutableStateOf(false) }
     var showSearchDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+
+    val voiceLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            val spokenText = result.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.get(0)
+            if (!spokenText.isNullOrEmpty()) {
+                onNavigate(if (spokenText.contains(".") && !spokenText.contains(" ")) {
+                    if (spokenText.startsWith("http")) spokenText else "https://$spokenText"
+                } else {
+                    val encoded = java.net.URLEncoder.encode(spokenText, "UTF-8")
+                    "https://www.google.com/search?q=$encoded"
+                })
+            }
+        }
+    }
+
+    fun startVoiceSearch() {
+        val intent = android.content.Intent(android.speech.RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(android.speech.RecognizerIntent.EXTRA_LANGUAGE_MODEL, android.speech.RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(android.speech.RecognizerIntent.EXTRA_PROMPT, "請說出搜尋內容")
+        }
+        voiceLauncher.launch(intent)
+    }
+
     var searchQuery by remember { mutableStateOf("") }
     var showAllBookmarksDialog by remember { mutableStateOf(false) }
     var bookmarkToEdit by remember { mutableStateOf<com.example.data.Bookmark?>(null) }
     var bookmarkToDelete by remember { mutableStateOf<com.example.data.Bookmark?>(null) }
+    var swipeOffset by remember { mutableStateOf(0f) }
+    val dragThresholdPx = with(androidx.compose.ui.platform.LocalDensity.current) { 50.dp.toPx() }
 
     LaunchedEffect(Unit) {
         try {
@@ -1821,7 +2059,40 @@ fun HomeScreen(
         }
     }
 
-    ScreenScaffold(scrollState = listState) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { swipeOffset = 0f },
+                    onDragEnd = {
+                        if (swipeOffset < -dragThresholdPx) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onNavigate("pixelbrowser://history")
+                        }
+                        swipeOffset = 0f
+                    },
+                    onDragCancel = { swipeOffset = 0f },
+                    onHorizontalDrag = { _, dragAmount ->
+                        swipeOffset = (swipeOffset + dragAmount).coerceAtMost(0f)
+                    }
+                )
+            }
+    ) {
+        ScreenScaffold(
+            scrollState = listState,
+            bottomButton = {
+                EdgeButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        showSettingsDialog = true
+                    }
+                ) {
+                    Icon(Icons.Default.Settings, contentDescription = "設定", modifier = Modifier.size(24.dp))
+                    Text("設定")
+                }
+            }
+        ) {
         ScalingLazyColumn(
             state = listState,
             modifier = Modifier
@@ -1851,7 +2122,7 @@ fun HomeScreen(
                     Card(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            showSearchDialog = true
+                            showSearchMethodDialog = true
                         },
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                         modifier = Modifier
@@ -1867,14 +2138,61 @@ fun HomeScreen(
                         ) {
                             Icon(
                                 Icons.Default.Search,
-                                contentDescription = "Search icon",
+                                contentDescription = "搜尋圖標",
                                 modifier = Modifier.size(20.dp),
                                 tint = MaterialTheme.colorScheme.onPrimaryContainer
                             )
                             Text(
-                                "Search or Enter URL",
+                                "搜尋或輸入網址",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    showSearchMethodDialog = true
+                                },
+                                modifier = Modifier.size(24.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Mic,
+                                    contentDescription = "語音搜尋",
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    val incognitoInt = remember { MutableInteractionSource() }
+                    Button(
+                        onClick = onToggleIncognito,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isIncognito) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .expressiveScale(incognitoInt),
+                        interactionSource = incognitoInt
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                if (isIncognito) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = if (isIncognito) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                if (isIncognito) "無痕模式 ON" else "無痕模式",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (isIncognito) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
@@ -2026,86 +2344,54 @@ fun HomeScreen(
                     }
                 }
 
-                if (history.isNotEmpty()) {
-                    item {
-                        ListHeader {
-                            Text("最近瀏覽紀錄", style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
-                    items(history.take(3)) { entry ->
-                        val cardInt = remember { MutableInteractionSource() }
-                        CompactListRow(
-                            onClick = { onNavigate(entry.url) },
-                            title = entry.title,
-                            url = entry.url,
-                            modifier = Modifier.expressiveScale(cardInt),
-                            interactionSource = cardInt
-                        )
-                    }
-                }
 
-                if (searchHistory.isNotEmpty()) {
-                    item {
-                        ListHeader {
-                            Text("最近搜尋紀錄", style = MaterialTheme.typography.titleMedium)
-                        }
-                    }
-                    items(searchHistory.take(3)) { entry ->
-                        val cardInt = remember { MutableInteractionSource() }
-                        CompactListRow(
-                            onClick = {
-                                onAddSearchHistory(entry.query)
-                                val dest = if (entry.query.contains(".") && !entry.query.contains(" ")) {
-                                    if (entry.query.startsWith("http")) entry.query else "https://${entry.query}"
-                                } else {
-                                    val encoded = URLEncoder.encode(entry.query, "UTF-8")
-                                    when (searchEngine) {
-                                        "Bing" -> "https://www.bing.com/search?q=$encoded"
-                                        "DuckDuckGo" -> "https://duckduckgo.com/?q=$encoded"
-                                        "Baidu" -> "https://www.baidu.com/s?wd=$encoded"
-                                        else -> "https://www.google.com/search?q=$encoded"
-                                    }
-                                }
-                                onNavigate(dest)
-                            },
-                            onDelete = { onDeleteSearchHistory(entry.id) },
-                            title = entry.query,
-                            url = "搜尋詞",
-                            modifier = Modifier.expressiveScale(cardInt),
-                            interactionSource = cardInt
-                        )
-                    }
-                }
-
-                item {
-                    val settingsInt = remember { MutableInteractionSource() }
-                    Button(
-                        onClick = { showSettingsDialog = true },
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 8.dp)
-                            .expressiveScale(settingsInt),
-                        interactionSource = settingsInt
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings Icon", modifier = Modifier.size(16.dp))
-                            Text("設定", style = MaterialTheme.typography.labelMedium)
-                        }
-                    }
-                }
             }
         }
+
+        // Visual history swipe gesture indicator (Right Side)
+        if (swipeOffset < 0f) {
+            val swipeAbs = -swipeOffset
+            val progress = (swipeAbs / dragThresholdPx).coerceIn(0f, 1.2f)
+            val isTriggered = swipeAbs >= dragThresholdPx
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .graphicsLayer {
+                        translationX = (40.dp.toPx() - (swipeAbs * 0.6f)).coerceAtLeast(-16.dp.toPx())
+                        alpha = progress.coerceIn(0f, 1f)
+                        scaleX = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
+                        scaleY = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
+                    }
+                    .background(
+                        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f),
+                        shape = androidx.compose.foundation.shape.CircleShape
+                    )
+                    .size(40.dp)
+                    .padding(8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.History,
+                    contentDescription = "瀏覽紀錄",
+                    tint = if (isTriggered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+    }
+
+    SearchMethodDialog(
+        show = showSearchMethodDialog,
+        onDismiss = { showSearchMethodDialog = false },
+        onVoiceSearch = { startVoiceSearch() },
+        onKeyboardSearch = { showSearchDialog = true }
+    )
 
     SearchDialog(
         show = showSearchDialog,
         onDismiss = { showSearchDialog = false },
         searchQuery = searchQuery,
         onSearchQueryChange = { searchQuery = it },
-        searchEngine = searchEngine,
         searchHistory = searchHistory,
         onAddSearchHistory = onAddSearchHistory,
         onDeleteSearchHistory = onDeleteSearchHistory,
@@ -2123,8 +2409,6 @@ fun HomeScreen(
         onToggleAdBlock = onToggleAdBlock,
         isTextOnly = isTextOnly,
         onToggleTextOnly = onToggleTextOnly,
-        searchEngine = searchEngine,
-        onSetSearchEngine = onSetSearchEngine,
         onClearHistory = onClearHistory
     )
 
@@ -2148,6 +2432,192 @@ fun HomeScreen(
         onEditBookmark = { bookmarkToEdit = it },
         onDeleteBookmark = { bookmarkToDelete = it }
     )
+}
+
+@Composable
+fun HistoryScreen(
+    history: List<com.example.data.HistoryEntry>,
+    searchHistory: List<com.example.data.SearchHistory>,
+    onNavigate: (String) -> Unit,
+    onDeleteHistoryEntry: (Long) -> Unit,
+    onDeleteSearchHistory: (Long) -> Unit,
+    onClearHistory: () -> Unit,
+    onAddSearchHistory: (String) -> Unit,
+    onBack: () -> Unit
+) {
+    val listState = rememberScalingLazyListState()
+    val coroutineScope = rememberCoroutineScope()
+    val haptic = LocalHapticFeedback.current
+    var swipeOffset by remember { mutableStateOf(0f) }
+    val dragThresholdPx = with(androidx.compose.ui.platform.LocalDensity.current) { 50.dp.toPx() }
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background)
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { swipeOffset = 0f },
+                    onDragEnd = {
+                        if (swipeOffset > dragThresholdPx) {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onBack()
+                        }
+                        swipeOffset = 0f
+                    },
+                    onDragCancel = { swipeOffset = 0f },
+                    onHorizontalDrag = { _, dragAmount ->
+                        swipeOffset = (swipeOffset + dragAmount).coerceAtLeast(0f)
+                    }
+                )
+            }
+    ) {
+        ScalingLazyColumn(
+            state = listState,
+            modifier = Modifier
+                .fillMaxSize()
+                .onRotaryScrollEvent {
+                    coroutineScope.launch {
+                        listState.scrollBy(it.verticalScrollPixels)
+                    }
+                    true
+                },
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            item {
+                ListHeader {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        IconButton(onClick = onBack, modifier = Modifier.size(24.dp)) {
+                            Icon(Icons.Default.ArrowBack, contentDescription = "返回", modifier = Modifier.size(16.dp))
+                        }
+                        Text("瀏覽與搜尋紀錄", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+            }
+
+            item {
+                Card(
+                    onClick = onBack,
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("返回首頁", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+
+            if (history.isEmpty() && searchHistory.isEmpty()) {
+                item {
+                    Text(
+                        "尚無紀錄",
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(16.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            if (history.isNotEmpty()) {
+                item {
+                    ListHeader {
+                        Text("網頁瀏覽紀錄", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                items(history) { entry ->
+                    val cardInt = remember { MutableInteractionSource() }
+                    CompactListRow(
+                        onClick = { onNavigate(entry.url) },
+                        onDelete = { onDeleteHistoryEntry(entry.id) },
+                        title = entry.title,
+                        url = entry.url,
+                        modifier = Modifier.expressiveScale(cardInt),
+                        interactionSource = cardInt
+                    )
+                }
+            }
+
+            if (searchHistory.isNotEmpty()) {
+                item {
+                    ListHeader {
+                        Text("搜尋紀錄", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                    }
+                }
+                items(searchHistory) { entry ->
+                    val cardInt = remember { MutableInteractionSource() }
+                    CompactListRow(
+                        onClick = {
+                            onAddSearchHistory(entry.query)
+                            val dest = if (entry.query.contains(".") && !entry.query.contains(" ")) {
+                                if (entry.query.startsWith("http")) entry.query else "https://${entry.query}"
+                            } else {
+                                val encoded = java.net.URLEncoder.encode(entry.query, "UTF-8")
+                                "https://www.google.com/search?q=$encoded"
+                            }
+                            onNavigate(dest)
+                        },
+                        onDelete = { onDeleteSearchHistory(entry.id) },
+                        title = entry.query,
+                        url = "搜尋",
+                        modifier = Modifier.expressiveScale(cardInt),
+                        interactionSource = cardInt
+                    )
+                }
+            }
+
+            item { Spacer(modifier = Modifier.height(12.dp)) }
+
+            if (history.isNotEmpty() || searchHistory.isNotEmpty()) {
+                item {
+                    Button(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onClearHistory()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)
+                    ) {
+                        Text("清除所有紀錄", color = MaterialTheme.colorScheme.onErrorContainer)
+                    }
+                }
+            }
+        }
+
+        // Visual swipe-to-back indicator (Left Side, swiping right to return home)
+        if (swipeOffset > 0f) {
+            val progress = (swipeOffset / dragThresholdPx).coerceIn(0f, 1.2f)
+            val isTriggered = swipeOffset >= dragThresholdPx
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .graphicsLayer {
+                        translationX = (-40.dp.toPx() + (swipeOffset * 0.6f)).coerceAtMost(16.dp.toPx())
+                        alpha = progress.coerceIn(0f, 1f)
+                        scaleX = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
+                        scaleY = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
+                    }
+                    .background(
+                        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f),
+                        shape = androidx.compose.foundation.shape.CircleShape
+                    )
+                    .size(40.dp)
+                    .padding(8.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Home,
+                    contentDescription = "返回首頁",
+                    tint = if (isTriggered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+    }
 }
 
 fun isNetworkAvailable(context: android.content.Context): Boolean {
@@ -2345,7 +2815,6 @@ fun SearchDialog(
     onDismiss: () -> Unit,
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
-    searchEngine: String,
     searchHistory: List<SearchHistory>,
     onAddSearchHistory: (String) -> Unit,
     onDeleteSearchHistory: (Long) -> Unit,
@@ -2425,12 +2894,7 @@ fun SearchDialog(
                                             if (searchQuery.startsWith("http")) searchQuery else "https://$searchQuery"
                                         } else {
                                             val encoded = URLEncoder.encode(searchQuery, "UTF-8")
-                                            when (searchEngine) {
-                                                "Bing" -> "https://www.bing.com/search?q=$encoded"
-                                                "DuckDuckGo" -> "https://duckduckgo.com/?q=$encoded"
-                                                "Baidu" -> "https://www.baidu.com/s?wd=$encoded"
-                                                else -> "https://www.google.com/search?q=$encoded"
-                                            }
+                                            "https://www.google.com/search?q=$encoded"
                                         }
                                         onNavigate(dest)
                                         onDismiss()
@@ -2450,12 +2914,7 @@ fun SearchDialog(
                                     if (searchQuery.startsWith("http")) searchQuery else "https://$searchQuery"
                                 } else {
                                     val encoded = URLEncoder.encode(searchQuery, "UTF-8")
-                                    when (searchEngine) {
-                                        "Bing" -> "https://www.bing.com/search?q=$encoded"
-                                        "DuckDuckGo" -> "https://duckduckgo.com/?q=$encoded"
-                                        "Baidu" -> "https://www.baidu.com/s?wd=$encoded"
-                                        else -> "https://www.google.com/search?q=$encoded"
-                                    }
+                                    "https://www.google.com/search?q=$encoded"
                                 }
                                 onNavigate(dest)
                                 onDismiss()
@@ -2505,11 +2964,11 @@ fun SearchDialog(
 }
 
 @Composable
-fun RecentHistoryDialog(
+fun SearchMethodDialog(
     show: Boolean,
     onDismiss: () -> Unit,
-    recentHistory: List<HistoryEntry>,
-    onNavigate: (String) -> Unit
+    onVoiceSearch: () -> Unit,
+    onKeyboardSearch: () -> Unit
 ) {
     if (!show) return
 
@@ -2523,47 +2982,88 @@ fun RecentHistoryDialog(
                 .padding(8.dp),
             contentAlignment = Alignment.Center
         ) {
-            val historyListState = rememberScalingLazyListState()
-            ScalingLazyColumn(
-                state = historyListState,
-                modifier = Modifier.fillMaxSize(),
-                horizontalAlignment = Alignment.CenterHorizontally
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
             ) {
-                item {
-                    ListHeader {
-                        Text("最近瀏覽記錄", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    text = "使用Google搜尋",
+                    style = MaterialTheme.typography.titleMedium,
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 語音搜尋按鈕
+                    val voiceInteraction = remember { MutableInteractionSource() }
+                    Button(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onVoiceSearch()
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(64.dp)
+                            .padding(horizontal = 6.dp)
+                            .expressiveScale(voiceInteraction),
+                        interactionSource = voiceInteraction,
+                        shape = CircleShape
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "語音搜尋",
+                                modifier = Modifier.size(28.dp),
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
-                }
-                if (recentHistory.isEmpty()) {
-                    item {
-                        Text("尚無瀏覽記錄", style = MaterialTheme.typography.bodySmall)
-                    }
-                } else {
-                    items(recentHistory) { entry ->
-                        CompactListRow(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                onNavigate(entry.url)
-                                onDismiss()
-                            },
-                            title = entry.title,
-                            url = entry.url
-                        )
-                    }
-                }
-                item {
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
-                item {
-                    IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "關閉")
+
+                    // 鍵盤搜尋按鈕
+                    val keyboardInteraction = remember { MutableInteractionSource() }
+                    Button(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            onKeyboardSearch()
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(64.dp)
+                            .padding(horizontal = 6.dp)
+                            .expressiveScale(keyboardInteraction),
+                        interactionSource = keyboardInteraction,
+                        shape = CircleShape
+                    ) {
+                        Box(
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier.fillMaxSize()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Keyboard,
+                                contentDescription = "鍵盤搜尋",
+                                modifier = Modifier.size(28.dp),
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 }
             }
-            PositionIndicator(
-                scalingLazyListState = historyListState,
-                modifier = Modifier.align(Alignment.CenterEnd)
-            )
         }
     }
 }
@@ -2580,8 +3080,6 @@ fun SettingsDialog(
     onToggleAdBlock: () -> Unit,
     isTextOnly: Boolean,
     onToggleTextOnly: () -> Unit,
-    searchEngine: String,
-    onSetSearchEngine: (String) -> Unit,
     onClearHistory: () -> Unit
 ) {
     if (!show) return
@@ -2649,7 +3147,7 @@ fun SettingsDialog(
                                 modifier = Modifier.size(36.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
                             ) {
-                                Icon(Icons.Default.Remove, contentDescription = "Decrease Zoom", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
+                                Icon(Icons.Default.Remove, contentDescription = "減少字型大小", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
                             }
                             Text(
                                 "$textZoom%",
@@ -2661,7 +3159,7 @@ fun SettingsDialog(
                                 modifier = Modifier.size(36.dp),
                                 colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
                             ) {
-                                Icon(Icons.Default.Add, contentDescription = "Increase Zoom", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
+                                Icon(Icons.Default.Add, contentDescription = "增加字型大小", modifier = Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurface)
                             }
                         }
                     }
@@ -2701,7 +3199,7 @@ fun SettingsDialog(
                             }
                             Icon(
                                 imageVector = if (isDeepMode) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                contentDescription = "Toggle",
+                                contentDescription = "切換狀態",
                                 tint = if (isDeepMode) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(24.dp)
                             )
@@ -2751,7 +3249,7 @@ fun SettingsDialog(
                             }
                             Icon(
                                 imageVector = if (isAdBlockEnabled) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                contentDescription = "Toggle",
+                                contentDescription = "切換狀態",
                                 tint = if (isAdBlockEnabled) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(24.dp)
                             )
@@ -2794,39 +3292,10 @@ fun SettingsDialog(
                             }
                             Icon(
                                 imageVector = if (isTextOnly) Icons.Default.ToggleOn else Icons.Default.ToggleOff,
-                                contentDescription = "Toggle",
+                                contentDescription = "切換狀態",
                                 tint = if (isTextOnly) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(24.dp)
                             )
-                        }
-                    }
-                }
-
-                // 3. 搜尋引擎 (Search Engine)
-                item {
-                    val engineInt = remember { MutableInteractionSource() }
-                    val engines = listOf("Google", "Bing", "DuckDuckGo", "Baidu")
-                    Card(
-                        onClick = {
-                            val nextIndex = (engines.indexOf(searchEngine) + 1) % engines.size
-                            onSetSearchEngine(engines[nextIndex])
-                        },
-                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                            .expressiveScale(engineInt),
-                        interactionSource = engineInt
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text("搜尋引擎", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
-                            Text(searchEngine, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                         }
                     }
                 }
@@ -2855,7 +3324,7 @@ fun SettingsDialog(
                         ) {
                             Icon(
                                 Icons.Default.Delete,
-                                contentDescription = "Clear",
+                                contentDescription = "清除",
                                 tint = MaterialTheme.colorScheme.onErrorContainer,
                                 modifier = Modifier.size(16.dp).padding(end = 4.dp)
                             )
@@ -2888,7 +3357,7 @@ fun SettingsDialog(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Check,
-                        contentDescription = "Done",
+                        contentDescription = "完成",
                         tint = MaterialTheme.colorScheme.onPrimary,
                         modifier = Modifier.size(24.dp)
                     )
@@ -3145,7 +3614,7 @@ fun QrDialog(
                 
                 item {
                     IconButton(onClick = onDismiss) {
-                        Icon(Icons.Default.Close, contentDescription = "Close QR")
+                        Icon(Icons.Default.Close, contentDescription = "關閉 QR 碼")
                     }
                 }
             }
@@ -3173,5 +3642,15 @@ fun LoadingOverlay(progress: Int) {
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary
         )
+    }
+}
+
+@Composable
+fun DeferredLoadingProgress(
+    isLoadingProvider: () -> Boolean,
+    progressProvider: () -> Int
+) {
+    if (isLoadingProvider()) {
+        LoadingOverlay(progress = progressProvider())
     }
 }

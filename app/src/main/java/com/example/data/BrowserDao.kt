@@ -39,9 +39,6 @@ interface BrowserDao {
     @Query("SELECT * FROM history_entries ORDER BY timestamp DESC")
     fun getAllHistory(): Flow<List<HistoryEntry>>
 
-    @Query("SELECT * FROM history_entries ORDER BY timestamp DESC LIMIT 10")
-    fun getRecentHistory(): Flow<List<HistoryEntry>>
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertHistoryEntry(entry: HistoryEntry)
 
