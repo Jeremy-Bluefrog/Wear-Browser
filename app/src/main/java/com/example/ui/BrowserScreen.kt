@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.constraintlayout.compose.ConstraintLayout
 import androidx.wear.compose.material3.*
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
 import androidx.wear.compose.foundation.lazy.items
@@ -70,6 +71,7 @@ import androidx.wear.compose.material.PositionIndicator
 import androidx.compose.ui.draw.clip
 import com.example.data.*
 import coil.compose.AsyncImage
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 
@@ -80,21 +82,21 @@ enum class ScreenState {
 @Composable
 fun BrowserScreen(viewModel: BrowserViewModel) {
     val haptic = LocalHapticFeedback.current
-    val currentUrl by viewModel.currentUrl.collectAsState()
-    val isDeepMode by viewModel.isDeepMode.collectAsState()
-    val isPowerSavingMode by viewModel.isPowerSavingMode.collectAsState()
-    val bookmarks by viewModel.bookmarks.collectAsState()
-    val downloadedFiles by viewModel.downloadedFiles.collectAsState()
-    val history by viewModel.history.collectAsState()
-    val searchHistory by viewModel.searchHistory.collectAsState()
-    val textZoom by viewModel.textZoom.collectAsState()
-    val isSpeaking by viewModel.isSpeaking.collectAsState()
-    val isCloudRendering by viewModel.isCloudRendering.collectAsState()
-    val isTextOnly by viewModel.isTextOnly.collectAsState()
-    val isAggressiveCaching by viewModel.isAggressiveCaching.collectAsState()
-    val isAdBlockEnabled by viewModel.isAdBlockEnabled.collectAsState()
-    val isCpuThrottleEnabled by viewModel.isCpuThrottleEnabled.collectAsState()
-    val isSmartRamCleanerEnabled by viewModel.isSmartRamCleanerEnabled.collectAsState()
+    val currentUrl by viewModel.currentUrl.collectAsStateWithLifecycle()
+    val isDeepMode by viewModel.isDeepMode.collectAsStateWithLifecycle()
+    val isPowerSavingMode by viewModel.isPowerSavingMode.collectAsStateWithLifecycle()
+    val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
+    val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle()
+    val history by viewModel.history.collectAsStateWithLifecycle()
+    val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
+    val textZoom by viewModel.textZoom.collectAsStateWithLifecycle()
+    val isSpeaking by viewModel.isSpeaking.collectAsStateWithLifecycle()
+    val isCloudRendering by viewModel.isCloudRendering.collectAsStateWithLifecycle()
+    val isTextOnly by viewModel.isTextOnly.collectAsStateWithLifecycle()
+    val isAggressiveCaching by viewModel.isAggressiveCaching.collectAsStateWithLifecycle()
+    val isAdBlockEnabled by viewModel.isAdBlockEnabled.collectAsStateWithLifecycle()
+    val isCpuThrottleEnabled by viewModel.isCpuThrottleEnabled.collectAsStateWithLifecycle()
+    val isSmartRamCleanerEnabled by viewModel.isSmartRamCleanerEnabled.collectAsStateWithLifecycle()
     
     var showMenu by remember { mutableStateOf(false) }
     var isIncognito by remember { mutableStateOf(false) }
@@ -164,7 +166,9 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     val finalSearchHistory = if (isIncognito) emptyList() else searchHistory
 
     AppScaffold {
-        Box(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+        ConstraintLayout(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+            val (contentRef, bottomTriggerRef, bottomIndicatorRef) = createRefs()
+            
             AnimatedContent(
                 targetState = screenState,
                 transitionSpec = {
@@ -191,7 +195,12 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                     enterTransition togetherWith exitTransition
                 },
                 label = "ScreenTransition",
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier.fillMaxSize().constrainAs(contentRef) {
+                    top.linkTo(parent.top)
+                    bottom.linkTo(parent.bottom)
+                    start.linkTo(parent.start)
+                    end.linkTo(parent.end)
+                }
             ) { state ->
                 when (state) {
                     ScreenState.MENU -> {
@@ -266,6 +275,8 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                 ScreenState.HOME -> {
                     HomeScreen(
                         bookmarks = bookmarks,
+                        downloadedFiles = downloadedFiles,
+                        onDeleteDownloadedFile = { id, path -> viewModel.deleteDownloadedFile(id, path) },
                         history = finalHistory,
                         searchHistory = finalSearchHistory,
                         onAddSearchHistory = { query -> viewModel.addSearchHistory(query) },
@@ -575,7 +586,11 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(40.dp)
-                    .align(Alignment.BottomCenter)
+                    .constrainAs(bottomTriggerRef) {
+                        bottom.linkTo(parent.bottom)
+                        start.linkTo(parent.start)
+                        end.linkTo(parent.end)
+                    }
                     .pointerInput(showMenu) {
                         if (showMenu) return@pointerInput
                         detectVerticalDragGestures(
@@ -622,7 +637,11 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
             if (bottomProgress > 0f) {
                 Box(
                     modifier = Modifier
-                        .align(Alignment.BottomCenter)
+                        .constrainAs(bottomIndicatorRef) {
+                            bottom.linkTo(parent.bottom)
+                            start.linkTo(parent.start)
+                            end.linkTo(parent.end)
+                        }
                         .offset(y = (40 - (bottomProgress * 40)).dp)
                         .size(width = 72.dp, height = 48.dp)
                         .alpha(bottomProgress)
@@ -693,8 +712,8 @@ fun WebViewComponent(
             WebView(context).apply {
                 onWebViewCreated(this)
                 
-                // Enforce hardware acceleration for silky-smooth scrolling on Wear OS
-                setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                // Default layer type is preferred for stability on Wear OS
+                // setLayerType(android.view.View.LAYER_TYPE_SOFTWARE, null)
                 
                 setDownloadListener { downloadUrl, userAgent, contentDisposition, mimetype, contentLength ->
                     onDownloadRequested(downloadUrl, contentDisposition, mimetype)
@@ -975,7 +994,9 @@ fun WebViewComponent(
             }
         },
         update = { webView ->
-            if (url != "pixelbrowser://home" && !url.startsWith("pixelbrowser://") && webView.url != url) {
+            val currentNorm = webView.url?.trim()?.removeSuffix("/")?.lowercase() ?: ""
+            val targetNorm = url.trim().removeSuffix("/").lowercase()
+            if (url != "pixelbrowser://home" && !url.startsWith("pixelbrowser://") && currentNorm != targetNorm) {
                 webView.loadUrl(url)
             }
             webView.settings.textZoom = textZoom
@@ -1982,6 +2003,8 @@ fun BookmarkMenu(
 @Composable
 fun HomeScreen(
     bookmarks: List<com.example.data.Bookmark>,
+    downloadedFiles: List<com.example.data.DownloadedFile>,
+    onDeleteDownloadedFile: (Long, String) -> Unit,
     history: List<com.example.data.HistoryEntry>,
     searchHistory: List<com.example.data.SearchHistory>,
     onAddSearchHistory: (String) -> Unit,
@@ -2019,6 +2042,7 @@ fun HomeScreen(
     var showSearchMethodDialog by remember { mutableStateOf(false) }
     var showSearchDialog by remember { mutableStateOf(false) }
     var showSettingsDialog by remember { mutableStateOf(false) }
+    var showDownloadsDialog by remember { mutableStateOf(false) }
 
     val voiceLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
@@ -2193,6 +2217,41 @@ fun HomeScreen(
                                 if (isIncognito) "無痕模式 ON" else "無痕模式",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = if (isIncognito) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+
+                item {
+                    val downloadsInt = remember { MutableInteractionSource() }
+                    Button(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            showDownloadsDialog = true
+                        },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 8.dp)
+                            .expressiveScale(downloadsInt),
+                        interactionSource = downloadsInt
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Download,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                "下載",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurface
                             )
                         }
                     }
@@ -2431,6 +2490,14 @@ fun HomeScreen(
         onNavigate = onNavigate,
         onEditBookmark = { bookmarkToEdit = it },
         onDeleteBookmark = { bookmarkToDelete = it }
+    )
+
+    DownloadsDialog(
+        show = showDownloadsDialog,
+        onDismiss = { showDownloadsDialog = false },
+        downloadedFiles = downloadedFiles,
+        onNavigate = onNavigate,
+        onDeleteDownloadedFile = onDeleteDownloadedFile
     )
 }
 
@@ -3510,6 +3577,133 @@ fun AllBookmarksDialog(
             }
             PositionIndicator(
                 scalingLazyListState = bookmarkListState,
+                modifier = Modifier.align(Alignment.CenterEnd)
+            )
+        }
+    }
+}
+
+@Composable
+fun DownloadsDialog(
+    show: Boolean,
+    onDismiss: () -> Unit,
+    downloadedFiles: List<com.example.data.DownloadedFile>,
+    onNavigate: (String) -> Unit,
+    onDeleteDownloadedFile: (Long, String) -> Unit
+) {
+    if (!show) return
+
+    val haptic = LocalHapticFeedback.current
+    val coroutineScope = rememberCoroutineScope()
+
+    ExpressiveDialog(onDismissRequest = onDismiss) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            val listState = rememberScalingLazyListState()
+            val focusRequester = remember { FocusRequester() }
+
+            LaunchedEffect(Unit) {
+                try {
+                    focusRequester.requestFocus()
+                } catch (e: Exception) {
+                    // Ignore focus request failure
+                }
+            }
+
+            ScalingLazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .focusRequester(focusRequester)
+                    .focusable()
+                    .onRotaryScrollEvent {
+                        coroutineScope.launch {
+                            listState.scrollBy(it.verticalScrollPixels)
+                        }
+                        true
+                    },
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                item {
+                    ListHeader {
+                        Text("下載項目", style = MaterialTheme.typography.titleMedium)
+                    }
+                }
+
+                if (downloadedFiles.isEmpty()) {
+                    item {
+                        Text("尚無下載檔案", style = MaterialTheme.typography.bodySmall)
+                    }
+                } else {
+                    items(downloadedFiles) { file ->
+                        val cardInt = remember { MutableInteractionSource() }
+                        Card(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onNavigate("file://${file.localPath}")
+                                onDismiss()
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp)
+                                .expressiveScale(cardInt),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                            interactionSource = cardInt
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        file.fileName,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        maxLines = 1,
+                                        color = MaterialTheme.colorScheme.onSurface
+                                    )
+                                    Text(
+                                        formatFileSize(file.fileSize),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onDeleteDownloadedFile(file.id, file.localPath)
+                                    },
+                                    modifier = Modifier.size(32.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.Delete,
+                                        contentDescription = "刪除檔案",
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                item {
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                item {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Default.Close, contentDescription = "關閉")
+                    }
+                }
+            }
+            PositionIndicator(
+                scalingLazyListState = listState,
                 modifier = Modifier.align(Alignment.CenterEnd)
             )
         }

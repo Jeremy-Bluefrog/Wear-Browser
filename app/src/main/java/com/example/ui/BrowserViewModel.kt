@@ -72,6 +72,8 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val _isSpeaking = MutableStateFlow(false)
     val isSpeaking: StateFlow<Boolean> = _isSpeaking.asStateFlow()
 
+    private var powerSaveReceiver: BroadcastReceiver? = null
+
     init {
         val dao = AppDatabase.getDatabase(application).browserDao()
         repository = BrowserRepository(dao)
@@ -99,6 +101,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             }
             try {
                 context.registerReceiver(receiver, filter)
+                powerSaveReceiver = receiver
             } catch (e: Exception) {
                 // Ignore receiver registration error if any
             }
@@ -418,5 +421,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         super.onCleared()
         tts?.stop()
         tts?.shutdown()
+        powerSaveReceiver?.let { receiver ->
+            try {
+                getApplication<Application>().unregisterReceiver(receiver)
+            } catch (e: Exception) {
+                // Ignore unregistration errors
+            }
+        }
     }
 }
