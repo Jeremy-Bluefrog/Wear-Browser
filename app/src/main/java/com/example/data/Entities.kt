@@ -10,13 +10,6 @@ data class Bookmark(
     val timestamp: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "cached_pages")
-data class CachedPage(
-    @PrimaryKey val url: String,
-    val content: String, // For offline-first simplified viewing if needed, or just track metadata
-    val timestamp: Long = System.currentTimeMillis()
-)
-
 @Entity(tableName = "downloaded_files")
 data class DownloadedFile(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,

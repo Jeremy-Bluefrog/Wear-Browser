@@ -5,7 +5,7 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [Bookmark::class, CachedPage::class, DownloadedFile::class, HistoryEntry::class, SearchHistory::class], version = 4, exportSchema = false)
+@Database(entities = [Bookmark::class, DownloadedFile::class, HistoryEntry::class, SearchHistory::class], version = 4, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun browserDao(): BrowserDao
 
@@ -20,7 +20,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "browser_database"
                 )
-                .fallbackToDestructiveMigration()
+                .fallbackToDestructiveMigration(dropAllTables = true)
                 .build()
                 INSTANCE = instance
                 instance

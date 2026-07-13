@@ -4,7 +4,6 @@ import kotlinx.coroutines.flow.Flow
 
 class BrowserRepository(private val dao: BrowserDao) {
     val bookmarks: Flow<List<Bookmark>> = dao.getAllBookmarks()
-    val cachedPages: Flow<List<CachedPage>> = dao.getAllCachedPages()
     val downloadedFiles: Flow<List<DownloadedFile>> = dao.getAllDownloadedFiles()
     val history: Flow<List<HistoryEntry>> = dao.getAllHistory()
     val searchHistory: Flow<List<SearchHistory>> = dao.getAllSearchHistory()
@@ -19,10 +18,6 @@ class BrowserRepository(private val dao: BrowserDao) {
 
     suspend fun removeBookmark(url: String) {
         dao.deleteBookmark(url)
-    }
-
-    suspend fun cachePage(url: String, content: String) {
-        dao.cachePage(CachedPage(url, content))
     }
 
     suspend fun addDownloadedFile(fileName: String, url: String, mimeType: String, localPath: String, fileSize: Long) {

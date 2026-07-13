@@ -21,12 +21,6 @@ interface BrowserDao {
     @Query("DELETE FROM bookmarks WHERE url = :url")
     suspend fun deleteBookmark(url: String)
 
-    @Query("SELECT * FROM cached_pages ORDER BY timestamp DESC")
-    fun getAllCachedPages(): Flow<List<CachedPage>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun cachePage(page: CachedPage)
-
     @Query("SELECT * FROM downloaded_files ORDER BY timestamp DESC")
     fun getAllDownloadedFiles(): Flow<List<DownloadedFile>>
 

@@ -9,6 +9,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.wear.compose.material3.ColorScheme
 import androidx.core.content.ContextCompat
 
+import androidx.compose.material3.dynamicDarkColorScheme
+
 private val WearDarkColorScheme = ColorScheme(
     primary = Color(0xFFD0BCFF),
     onPrimary = Color(0xFF381E72),
@@ -37,26 +39,35 @@ fun WearAppTheme(
 ) {
     val context = LocalContext.current
     val colorScheme = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        try {
-            val systemAccent = Color(ContextCompat.getColor(context, android.R.color.system_accent1_300))
-            val systemAccentContainer = Color(ContextCompat.getColor(context, android.R.color.system_accent1_700))
-            val systemOnAccentContainer = Color(ContextCompat.getColor(context, android.R.color.system_accent1_100))
-            
-            val systemSecondary = Color(ContextCompat.getColor(context, android.R.color.system_accent2_300))
-            val systemSecondaryContainer = Color(ContextCompat.getColor(context, android.R.color.system_accent2_700))
-            val systemOnSecondaryContainer = Color(ContextCompat.getColor(context, android.R.color.system_accent2_100))
-
-            WearDarkColorScheme.copy(
-                primary = systemAccent,
-                primaryContainer = systemAccentContainer,
-                onPrimaryContainer = systemOnAccentContainer,
-                secondary = systemSecondary,
-                secondaryContainer = systemSecondaryContainer,
-                onSecondaryContainer = systemOnSecondaryContainer
-            )
-        } catch (e: Exception) {
-            WearDarkColorScheme
-        }
+        val dynamicColor = dynamicDarkColorScheme(context)
+        // Convert regular M3 ColorScheme to Wear M3 ColorScheme
+        ColorScheme(
+            primary = dynamicColor.primary,
+            onPrimary = dynamicColor.onPrimary,
+            primaryContainer = dynamicColor.primaryContainer,
+            onPrimaryContainer = dynamicColor.onPrimaryContainer,
+            secondary = dynamicColor.secondary,
+            onSecondary = dynamicColor.onSecondary,
+            secondaryContainer = dynamicColor.secondaryContainer,
+            onSecondaryContainer = dynamicColor.onSecondaryContainer,
+            tertiary = dynamicColor.tertiary,
+            onTertiary = dynamicColor.onTertiary,
+            tertiaryContainer = dynamicColor.tertiaryContainer,
+            onTertiaryContainer = dynamicColor.onTertiaryContainer,
+            error = dynamicColor.error,
+            onError = dynamicColor.onError,
+            errorContainer = dynamicColor.errorContainer,
+            onErrorContainer = dynamicColor.onErrorContainer,
+            background = Color.Black, // Keep pure black for Wear
+            onBackground = dynamicColor.onBackground,
+            outline = dynamicColor.outline,
+            outlineVariant = dynamicColor.outlineVariant,
+            surfaceContainerLow = dynamicColor.surfaceContainerLow,
+            surfaceContainer = dynamicColor.surfaceContainer,
+            surfaceContainerHigh = dynamicColor.surfaceContainerHigh,
+            onSurface = dynamicColor.onSurface,
+            onSurfaceVariant = dynamicColor.onSurfaceVariant
+        )
     } else {
         WearDarkColorScheme
     }

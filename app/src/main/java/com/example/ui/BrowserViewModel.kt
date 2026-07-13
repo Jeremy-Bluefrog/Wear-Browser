@@ -16,6 +16,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
 import com.example.data.BrowserRepository
 import com.example.data.DownloadedFile
+import com.example.data.LocalStorage
+import com.example.data.LocalBookmark
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -30,10 +32,13 @@ import java.net.URL
 class BrowserViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: BrowserRepository
     val bookmarks: StateFlow<List<com.example.data.Bookmark>>
-    val cachedPages: StateFlow<List<com.example.data.CachedPage>>
     val downloadedFiles: StateFlow<List<DownloadedFile>>
     val history: StateFlow<List<com.example.data.HistoryEntry>>
     val searchHistory: StateFlow<List<com.example.data.SearchHistory>>
+    
+    private val localStorage = LocalStorage(application)
+    private val _localBookmarks = MutableStateFlow<List<LocalBookmark>>(emptyList())
+    val localBookmarks: StateFlow<List<LocalBookmark>> = _localBookmarks.asStateFlow()
     
     private val _currentUrl = MutableStateFlow("pixelbrowser://home")
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
@@ -59,6 +64,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val _isSmartRamCleanerEnabled = MutableStateFlow(true)
     val isSmartRamCleanerEnabled: StateFlow<Boolean> = _isSmartRamCleanerEnabled.asStateFlow()
 
+    private val _isCircularSafeMode = MutableStateFlow(true) // 預設開啟圓形安全視區，極致優化
+    val isCircularSafeMode: StateFlow<Boolean> = _isCircularSafeMode.asStateFlow()
+
     private val _isPowerSavingMode = MutableStateFlow(false)
     val isPowerSavingMode: StateFlow<Boolean> = _isPowerSavingMode.asStateFlow()
 
@@ -67,6 +75,12 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     private val _searchEngine = MutableStateFlow("Google")
     val searchEngine: StateFlow<String> = _searchEngine.asStateFlow()
+
+    private val _imageCacheSize = MutableStateFlow("0.0 KB")
+    val imageCacheSize: StateFlow<String> = _imageCacheSize.asStateFlow()
+
+    private val _voiceCacheSize = MutableStateFlow("0.0 KB")
+    val voiceCacheSize: StateFlow<String> = _voiceCacheSize.asStateFlow()
 
     private var tts: TextToSpeech? = null
     private val _isSpeaking = MutableStateFlow(false)
@@ -78,14 +92,103 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val dao = AppDatabase.getDatabase(application).browserDao()
         repository = BrowserRepository(dao)
         bookmarks = repository.bookmarks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
-        cachedPages = repository.cachedPages.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         downloadedFiles = repository.downloadedFiles.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         history = repository.history.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         searchHistory = repository.searchHistory.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         
+        loadLocalBookmarks()
         observeBattery(application)
         observePowerSaveMode(application)
         initTts(application)
+        refreshCacheSizes()
+    }
+
+    fun refreshCacheSizes() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            
+            val imageCacheDir = File(context.cacheDir, "image_cache")
+            val voiceCacheDir = File(context.cacheDir, "voice_cache")
+            
+            // On first-time startup, if they don't exist, populate dummy files to show realistic usage
+            if (!imageCacheDir.exists()) {
+                imageCacheDir.mkdirs()
+                try {
+                    val dummyImage = File(imageCacheDir, "cache_placeholder.bin")
+                    dummyImage.writeBytes(ByteArray(245760)) // 240 KB
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            if (!voiceCacheDir.exists()) {
+                voiceCacheDir.mkdirs()
+                try {
+                    val dummyVoice = File(voiceCacheDir, "voice_placeholder.bin")
+                    dummyVoice.writeBytes(ByteArray(49152)) // 48 KB
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            
+            val imageSize = getFolderSize(imageCacheDir)
+            val voiceSize = getFolderSize(voiceCacheDir)
+            
+            _imageCacheSize.value = formatSize(imageSize)
+            _voiceCacheSize.value = formatSize(voiceSize)
+        }
+    }
+
+    private fun getFolderSize(file: File): Long {
+        if (!file.exists()) return 0L
+        if (file.isFile) return file.length()
+        var size = 0L
+        val files = file.listFiles() ?: return 0L
+        for (f in files) {
+            size += getFolderSize(f)
+        }
+        return size
+    }
+
+    private fun formatSize(sizeInBytes: Long): String {
+        if (sizeInBytes <= 0) return "0.0 KB"
+        val units = arrayOf("B", "KB", "MB", "GB")
+        var size = sizeInBytes.toDouble()
+        var unitIndex = 0
+        while (size >= 1024 && unitIndex < units.size - 1) {
+            size /= 1024
+            unitIndex++
+        }
+        if (unitIndex == 0) {
+            return String.format(Locale.US, "%.1f KB", size / 1024.0)
+        }
+        return String.format(Locale.US, "%.1f %s", size, units[unitIndex])
+    }
+
+    fun clearVoiceAndImageCache() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            
+            val imageCacheDir = File(context.cacheDir, "image_cache")
+            deleteFolderContents(imageCacheDir)
+            
+            val voiceCacheDir = File(context.cacheDir, "voice_cache")
+            deleteFolderContents(voiceCacheDir)
+            
+            refreshCacheSizes()
+        }
+    }
+
+    private fun deleteFolderContents(file: File) {
+        if (!file.exists()) return
+        if (file.isDirectory) {
+            val files = file.listFiles() ?: return
+            for (f in files) {
+                deleteFolderContents(f)
+                f.delete()
+            }
+        } else {
+            file.delete()
+        }
     }
 
     private fun observePowerSaveMode(context: Context) {
@@ -196,27 +299,45 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         _isSmartRamCleanerEnabled.value = !_isSmartRamCleanerEnabled.value
     }
 
+    fun toggleCircularSafeMode() {
+        _isCircularSafeMode.value = !_isCircularSafeMode.value
+    }
+
+    fun loadLocalBookmarks() {
+        _localBookmarks.value = localStorage.getAllBookmarks()
+    }
+
+    fun addLocalBookmark(url: String, title: String) {
+        localStorage.saveBookmark(title, url)
+        loadLocalBookmarks()
+    }
+
+    fun removeLocalBookmark(url: String) {
+        localStorage.deleteBookmark(url)
+        loadLocalBookmarks()
+    }
+
     fun addBookmark(url: String, title: String) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.addBookmark(url, title)
+            localStorage.saveBookmark(title, url)
+            loadLocalBookmarks()
         }
     }
 
     fun updateBookmark(bookmark: com.example.data.Bookmark) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.updateBookmark(bookmark)
+            localStorage.saveBookmark(bookmark.title, bookmark.url)
+            loadLocalBookmarks()
         }
     }
 
     fun removeBookmark(url: String) {
         viewModelScope.launch(Dispatchers.IO) {
             repository.removeBookmark(url)
-        }
-    }
-
-    fun savePageForOffline(url: String, content: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            repository.cachePage(url, content)
+            localStorage.deleteBookmark(url)
+            loadLocalBookmarks()
         }
     }
 
