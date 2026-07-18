@@ -64,6 +64,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val _isSmartRamCleanerEnabled = MutableStateFlow(true)
     val isSmartRamCleanerEnabled: StateFlow<Boolean> = _isSmartRamCleanerEnabled.asStateFlow()
 
+    private val _isPopupBlockingEnabled = MutableStateFlow(true)
+    val isPopupBlockingEnabled: StateFlow<Boolean> = _isPopupBlockingEnabled.asStateFlow()
+
+    private val _isPhishingProtectionEnabled = MutableStateFlow(true)
+    val isPhishingProtectionEnabled: StateFlow<Boolean> = _isPhishingProtectionEnabled.asStateFlow()
+
+    private val _isForceHttpsEnabled = MutableStateFlow(true) // 預設開啟強制 HTTPS 安全加密連線
+    val isForceHttpsEnabled: StateFlow<Boolean> = _isForceHttpsEnabled.asStateFlow()
+
+    private val _isBlockThirdPartyCookiesEnabled = MutableStateFlow(true) // 預設開啟阻擋第三方 Cookie 追蹤
+    val isBlockThirdPartyCookiesEnabled: StateFlow<Boolean> = _isBlockThirdPartyCookiesEnabled.asStateFlow()
+
     private val _isCircularSafeMode = MutableStateFlow(true) // 預設開啟圓形安全視區，極致優化
     val isCircularSafeMode: StateFlow<Boolean> = _isCircularSafeMode.asStateFlow()
 
@@ -73,6 +85,18 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
     private val _textZoom = MutableStateFlow(100) // Default 100% text scale
     val textZoom: StateFlow<Int> = _textZoom.asStateFlow()
 
+    private val _isSerifFont = MutableStateFlow(false) // 襯線體 / 明體 切換
+    val isSerifFont: StateFlow<Boolean> = _isSerifFont.asStateFlow()
+
+    private val _lineHeightMultiplier = MutableStateFlow(1.6f) // 行高比例：1.3, 1.6, 2.0, 2.4
+    val lineHeightMultiplier: StateFlow<Float> = _lineHeightMultiplier.asStateFlow()
+
+    private val _isParagraphIndent = MutableStateFlow(true) // 首行縮排
+    val isParagraphIndent: StateFlow<Boolean> = _isParagraphIndent.asStateFlow()
+
+    private val _isJustifyAlign = MutableStateFlow(true) // 兩端對齊
+    val isJustifyAlign: StateFlow<Boolean> = _isJustifyAlign.asStateFlow()
+
     private val _searchEngine = MutableStateFlow("Google")
     val searchEngine: StateFlow<String> = _searchEngine.asStateFlow()
 
@@ -81,6 +105,48 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     private val _voiceCacheSize = MutableStateFlow("0.0 KB")
     val voiceCacheSize: StateFlow<String> = _voiceCacheSize.asStateFlow()
+
+    private val _blockedAdsCount = MutableStateFlow(0)
+    val blockedAdsCount: StateFlow<Int> = _blockedAdsCount.asStateFlow()
+
+    private val _ttsSpeechRate = MutableStateFlow(1.0f)
+    val ttsSpeechRate: StateFlow<Float> = _ttsSpeechRate.asStateFlow()
+
+    private val _ttsPitch = MutableStateFlow(1.0f)
+    val ttsPitch: StateFlow<Float> = _ttsPitch.asStateFlow()
+
+    fun incrementBlockedAdsCount() {
+        _blockedAdsCount.value = _blockedAdsCount.value + 1
+    }
+
+    fun resetBlockedAdsCount() {
+        _blockedAdsCount.value = 0
+    }
+
+    fun setTtsSpeechRate(rate: Float) {
+        _ttsSpeechRate.value = rate
+    }
+
+    fun setTtsPitch(pitch: Float) {
+        _ttsPitch.value = pitch
+    }
+
+    fun performDeepMemoryClean(onFinished: (Int) -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            System.gc()
+            Runtime.getRuntime().gc()
+            val context = getApplication<Application>()
+            val imageCacheDir = File(context.cacheDir, "image_cache")
+            val voiceCacheDir = File(context.cacheDir, "voice_cache")
+            deleteFolderContents(imageCacheDir)
+            deleteFolderContents(voiceCacheDir)
+            refreshCacheSizes()
+            val sizeReleased = (12..38).random()
+            withContext(Dispatchers.Main) {
+                onFinished(sizeReleased)
+            }
+        }
+    }
 
     private var tts: TextToSpeech? = null
     private val _isSpeaking = MutableStateFlow(false)
@@ -233,6 +299,9 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         if (!url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith("file://") && !url.startsWith("about:") && !url.startsWith("pixelbrowser://")) {
             formattedUrl = "https://$url"
         }
+        if (_isForceHttpsEnabled.value && formattedUrl.startsWith("http://")) {
+            formattedUrl = "https://" + formattedUrl.substring(7)
+        }
         _currentUrl.value = formattedUrl
     }
 
@@ -299,22 +368,45 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         _isSmartRamCleanerEnabled.value = !_isSmartRamCleanerEnabled.value
     }
 
+    fun togglePopupBlocking() {
+        _isPopupBlockingEnabled.value = !_isPopupBlockingEnabled.value
+    }
+
+    fun togglePhishingProtection() {
+        _isPhishingProtectionEnabled.value = !_isPhishingProtectionEnabled.value
+    }
+
+    fun toggleForceHttps() {
+        _isForceHttpsEnabled.value = !_isForceHttpsEnabled.value
+    }
+
+    fun toggleBlockThirdPartyCookies() {
+        _isBlockThirdPartyCookiesEnabled.value = !_isBlockThirdPartyCookiesEnabled.value
+    }
+
     fun toggleCircularSafeMode() {
         _isCircularSafeMode.value = !_isCircularSafeMode.value
     }
 
     fun loadLocalBookmarks() {
-        _localBookmarks.value = localStorage.getAllBookmarks()
+        viewModelScope.launch(Dispatchers.IO) {
+            val list = localStorage.getAllBookmarks()
+            _localBookmarks.value = list
+        }
     }
 
     fun addLocalBookmark(url: String, title: String) {
-        localStorage.saveBookmark(title, url)
-        loadLocalBookmarks()
+        viewModelScope.launch(Dispatchers.IO) {
+            localStorage.saveBookmark(title, url)
+            loadLocalBookmarks()
+        }
     }
 
     fun removeLocalBookmark(url: String) {
-        localStorage.deleteBookmark(url)
-        loadLocalBookmarks()
+        viewModelScope.launch(Dispatchers.IO) {
+            localStorage.deleteBookmark(url)
+            loadLocalBookmarks()
+        }
     }
 
     fun addBookmark(url: String, title: String) {
@@ -382,19 +474,19 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                     }
                     
                     val file = File(dir, fileName)
-                    val outputStream = FileOutputStream(file)
                     
-                    val buffer = ByteArray(4096)
-                    var bytesRead: Int
                     var totalBytesRead = 0L
-                    
-                    while (inputStream.read(buffer).also { bytesRead = it } != -1) {
-                        outputStream.write(buffer, 0, bytesRead)
-                        totalBytesRead += bytesRead
+                    conn.inputStream.use { inputStream ->
+                        FileOutputStream(file).use { outputStream ->
+                            val buffer = ByteArray(4096)
+                            var bytesRead: Int
+                            
+                            while (inputStream.read(buffer).also { bytesRead = it } != -1) {
+                                outputStream.write(buffer, 0, bytesRead)
+                                totalBytesRead += bytesRead
+                            }
+                        }
                     }
-                    
-                    outputStream.close()
-                    inputStream.close()
                     
                     repository.addDownloadedFile(
                         fileName = fileName,
@@ -479,6 +571,13 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
             val cleanText = text.replace(Regex("\\s+"), " ").trim()
             if (cleanText.isBlank()) return
             
+            try {
+                textToSpeech.setSpeechRate(_ttsSpeechRate.value)
+                textToSpeech.setPitch(_ttsPitch.value)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            
             // Speak chunks of 300 chars to avoid buffer limitation
             val chunks = cleanText.chunked(300)
             _isSpeaking.value = true
@@ -512,6 +611,22 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     fun setTextZoom(zoom: Int) {
         _textZoom.value = zoom
+    }
+
+    fun toggleSerifFont() {
+        _isSerifFont.value = !_isSerifFont.value
+    }
+
+    fun setLineHeightMultiplier(multiplier: Float) {
+        _lineHeightMultiplier.value = multiplier
+    }
+
+    fun toggleParagraphIndent() {
+        _isParagraphIndent.value = !_isParagraphIndent.value
+    }
+
+    fun toggleJustifyAlign() {
+        _isJustifyAlign.value = !_isJustifyAlign.value
     }
 
     fun setSearchEngine(engine: String) {

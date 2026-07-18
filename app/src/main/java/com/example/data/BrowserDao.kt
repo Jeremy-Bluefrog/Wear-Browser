@@ -30,7 +30,7 @@ interface BrowserDao {
     @Query("DELETE FROM downloaded_files WHERE id = :id")
     suspend fun deleteDownloadedFile(id: Long)
 
-    @Query("SELECT * FROM history_entries ORDER BY timestamp DESC")
+    @Query("SELECT * FROM history_entries ORDER BY timestamp DESC LIMIT 500")
     fun getAllHistory(): Flow<List<HistoryEntry>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -42,7 +42,7 @@ interface BrowserDao {
     @Query("DELETE FROM history_entries")
     suspend fun clearAllHistory()
 
-    @Query("SELECT * FROM search_history ORDER BY timestamp DESC")
+    @Query("SELECT * FROM search_history ORDER BY timestamp DESC LIMIT 200")
     fun getAllSearchHistory(): Flow<List<SearchHistory>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)

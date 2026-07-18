@@ -2,15 +2,22 @@ package com.example.data
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import androidx.room.Index
 
-@Entity(tableName = "bookmarks")
+@Entity(
+    tableName = "bookmarks",
+    indices = [Index(value = ["timestamp"])]
+)
 data class Bookmark(
     @PrimaryKey val url: String,
     val title: String,
     val timestamp: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "downloaded_files")
+@Entity(
+    tableName = "downloaded_files",
+    indices = [Index(value = ["timestamp"])]
+)
 data class DownloadedFile(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val fileName: String,
@@ -21,7 +28,10 @@ data class DownloadedFile(
     val timestamp: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "history_entries")
+@Entity(
+    tableName = "history_entries",
+    indices = [Index(value = ["timestamp"])]
+)
 data class HistoryEntry(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val url: String,
@@ -29,10 +39,14 @@ data class HistoryEntry(
     val timestamp: Long = System.currentTimeMillis()
 )
 
-@Entity(tableName = "search_history")
+@Entity(
+    tableName = "search_history",
+    indices = [Index(value = ["timestamp"])]
+)
 data class SearchHistory(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val query: String,
     val timestamp: Long = System.currentTimeMillis()
 )
+
 

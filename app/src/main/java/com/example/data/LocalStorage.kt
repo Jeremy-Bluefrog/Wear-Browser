@@ -72,7 +72,8 @@ class LocalStorage(context: Context) {
                 }
                 jsonArray.put(obj)
             }
-            prefs.edit().putString(KEY_BOOKMARKS, jsonArray.toString()).commit()
+            prefs.edit().putString(KEY_BOOKMARKS, jsonArray.toString()).apply()
+            true
         } catch (e: Exception) {
             e.printStackTrace()
             false
