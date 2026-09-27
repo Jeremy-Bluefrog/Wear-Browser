@@ -8,6 +8,10 @@ import android.os.BatteryManager
 import android.os.Environment
 import android.os.PowerManager
 import android.content.BroadcastReceiver
+import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Build
 import android.webkit.URLUtil
 import android.widget.Toast
@@ -32,13 +36,23 @@ import java.net.URL
 class BrowserViewModel(application: Application) : AndroidViewModel(application) {
     private val repository: BrowserRepository
     val bookmarks: StateFlow<List<com.example.data.Bookmark>>
+    val offlinePages: StateFlow<List<com.example.data.OfflinePage>>
     val downloadedFiles: StateFlow<List<DownloadedFile>>
     val history: StateFlow<List<com.example.data.HistoryEntry>>
     val searchHistory: StateFlow<List<com.example.data.SearchHistory>>
     
+    private val _isOnline = MutableStateFlow(true)
+    val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
+    private var networkCallback: android.net.ConnectivityManager.NetworkCallback? = null
+
     private val localStorage = LocalStorage(application)
     private val _localBookmarks = MutableStateFlow<List<LocalBookmark>>(emptyList())
     val localBookmarks: StateFlow<List<LocalBookmark>> = _localBookmarks.asStateFlow()
+
+    private val _activeDownloads = MutableStateFlow<List<com.example.data.DownloadTask>>(emptyList())
+    val activeDownloads: StateFlow<List<com.example.data.DownloadTask>> = _activeDownloads.asStateFlow()
+
+    private val downloadJobs = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.Job>()
     
     private val _currentUrl = MutableStateFlow("pixelbrowser://home")
     val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
@@ -78,6 +92,17 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
 
     private val _isCircularSafeMode = MutableStateFlow(true) // 預設開啟圓形安全視區，極致優化
     val isCircularSafeMode: StateFlow<Boolean> = _isCircularSafeMode.asStateFlow()
+
+    private val _isOneHandedGesturesEnabled = MutableStateFlow(true) // 預設開啟單手手勢 (雙指捏合/翻轉手腕)
+    val isOneHandedGesturesEnabled: StateFlow<Boolean> = _isOneHandedGesturesEnabled.asStateFlow()
+
+    private val _gestureSensitivity = MutableStateFlow("標準") // "標準", "高靈敏度", "低靈敏度"
+    val gestureSensitivity: StateFlow<String> = _gestureSensitivity.asStateFlow()
+
+    private val _gestureHudMessage = MutableStateFlow<String?>(null)
+    val gestureHudMessage: StateFlow<String?> = _gestureHudMessage.asStateFlow()
+
+    private var hudDismissJob: kotlinx.coroutines.Job? = null
 
     private val _isPowerSavingMode = MutableStateFlow(false)
     val isPowerSavingMode: StateFlow<Boolean> = _isPowerSavingMode.asStateFlow()
@@ -158,6 +183,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         val dao = AppDatabase.getDatabase(application).browserDao()
         repository = BrowserRepository(dao)
         bookmarks = repository.bookmarks.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+        offlinePages = repository.offlinePages.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         downloadedFiles = repository.downloadedFiles.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         history = repository.history.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
         searchHistory = repository.searchHistory.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -165,6 +191,7 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         loadLocalBookmarks()
         observeBattery(application)
         observePowerSaveMode(application)
+        observeNetworkConnectivity(application)
         initTts(application)
         refreshCacheSizes()
     }
@@ -290,6 +317,183 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    private fun observeNetworkConnectivity(context: Context) {
+        try {
+            val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+            if (cm != null) {
+                val activeNet = cm.activeNetwork
+                val caps = cm.getNetworkCapabilities(activeNet)
+                _isOnline.value = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+
+                val request = NetworkRequest.Builder()
+                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                    .build()
+                val callback = object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) {
+                        _isOnline.value = true
+                    }
+
+                    override fun onLost(network: Network) {
+                        val currentActive = cm.activeNetwork
+                        val currentCaps = cm.getNetworkCapabilities(currentActive)
+                        _isOnline.value = currentCaps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+                    }
+                }
+                cm.registerNetworkCallback(request, callback)
+                networkCallback = callback
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    fun saveCurrentWebPage(
+        url: String,
+        title: String,
+        webView: android.webkit.WebView?,
+        onResult: ((Boolean, String) -> Unit)? = null
+    ) {
+        if (url.isBlank() || url.startsWith("pixelbrowser://") || url.startsWith("file://")) {
+            onResult?.invoke(false, "無法儲存內部網頁")
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val context = getApplication<Application>()
+                val offlineDir = File(context.filesDir, "offline_pages")
+                if (!offlineDir.exists()) {
+                    offlineDir.mkdirs()
+                }
+
+                val safeTitle = title.ifBlank { url }.replace(Regex("[^a-zA-Z0-9\\u4e00-\\u9fa5]"), "_").take(25)
+                val archiveFile = File(offlineDir, "offline_${System.currentTimeMillis()}_${safeTitle}.mht")
+
+                withContext(Dispatchers.Main) {
+                    if (webView != null) {
+                        webView.saveWebArchive(archiveFile.absolutePath, false) { savedPath ->
+                            if (savedPath != null) {
+                                viewModelScope.launch(Dispatchers.IO) {
+                                    val savedFile = File(savedPath)
+                                    val fileSize = savedFile.length()
+                                    val textSnippet = try {
+                                        org.jsoup.Jsoup.parse(savedFile, "UTF-8").body().text().take(300)
+                                    } catch (e: Exception) {
+                                        title
+                                    }
+
+                                    repository.saveOfflinePage(
+                                        url = url,
+                                        title = if (title.isNotBlank()) title else url,
+                                        localPath = savedPath,
+                                        textSnippet = textSnippet,
+                                        fileSize = fileSize
+                                    )
+
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "已成功儲存網頁供離線閱讀", Toast.LENGTH_SHORT).show()
+                                        onResult?.invoke(true, savedPath)
+                                    }
+                                }
+                            } else {
+                                fallbackDownloadHtml(url, title, archiveFile, onResult)
+                            }
+                        }
+                    } else {
+                        fallbackDownloadHtml(url, title, archiveFile, onResult)
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), "離線儲存失敗: ${e.message}", Toast.LENGTH_SHORT).show()
+                    onResult?.invoke(false, e.message ?: "儲存失敗")
+                }
+            }
+        }
+    }
+
+    private fun fallbackDownloadHtml(
+        url: String,
+        title: String,
+        targetFile: File,
+        onResult: ((Boolean, String) -> Unit)?
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val doc = org.jsoup.Jsoup.connect(url)
+                    .userAgent("Mozilla/5.0 (Linux; Android 13; Wear OS) AppleWebKit/537.36")
+                    .timeout(12000)
+                    .get()
+                val html = doc.outerHtml()
+                val htmlFile = File(targetFile.parentFile, targetFile.nameWithoutExtension + ".html")
+                htmlFile.writeText(html, Charsets.UTF_8)
+                val snippet = doc.body().text().take(300)
+                val displayTitle = doc.title().ifBlank { title.ifBlank { url } }
+
+                repository.saveOfflinePage(
+                    url = url,
+                    title = displayTitle,
+                    localPath = htmlFile.absolutePath,
+                    textSnippet = snippet,
+                    fileSize = htmlFile.length()
+                )
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), "已成功儲存網頁供離線閱讀", Toast.LENGTH_SHORT).show()
+                    onResult?.invoke(true, htmlFile.absolutePath)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), "離線下載失敗: ${e.message}", Toast.LENGTH_SHORT).show()
+                    onResult?.invoke(false, e.message ?: "下載失敗")
+                }
+            }
+        }
+    }
+
+    fun deleteOfflinePage(id: Long, localPath: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.removeOfflinePage(id)
+            try {
+                val f = File(localPath)
+                if (f.exists()) {
+                    f.delete()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun deleteOfflinePageByUrl(url: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val page = repository.getOfflinePageByUrl(url)
+            if (page != null) {
+                repository.removeOfflinePage(page.id)
+                try {
+                    val f = File(page.localPath)
+                    if (f.exists()) {
+                        f.delete()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+        }
+    }
+
+    fun clearAllOfflinePages() {
+        viewModelScope.launch(Dispatchers.IO) {
+            repository.clearAllOfflinePages()
+            val offlineDir = File(getApplication<Application>().filesDir, "offline_pages")
+            if (offlineDir.exists()) {
+                offlineDir.listFiles()?.forEach { it.delete() }
+            }
+        }
+    }
+
     fun navigateTo(url: String) {
         if (url == "pixelbrowser://home") {
             _currentUrl.value = url
@@ -388,6 +592,23 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         _isCircularSafeMode.value = !_isCircularSafeMode.value
     }
 
+    fun toggleOneHandedGestures() {
+        _isOneHandedGesturesEnabled.value = !_isOneHandedGesturesEnabled.value
+    }
+
+    fun setGestureSensitivity(sensitivity: String) {
+        _gestureSensitivity.value = sensitivity
+    }
+
+    fun showGestureHud(message: String) {
+        _gestureHudMessage.value = message
+        hudDismissJob?.cancel()
+        hudDismissJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(1800L)
+            _gestureHudMessage.value = null
+        }
+    }
+
     fun loadLocalBookmarks() {
         viewModelScope.launch(Dispatchers.IO) {
             val list = localStorage.getAllBookmarks()
@@ -433,83 +654,203 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    fun downloadFile(url: String, contentDisposition: String? = null, mimeType: String? = null) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                // Guess the file name
-                var fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
-                if (fileName.isNullOrBlank() || fileName == "downloadfile.bin") {
-                    // Extract name from URL if possible, otherwise use a timestamp
-                    val urlPath = URL(url).path
-                    val lastSegment = urlPath.substringAfterLast('/')
-                    if (lastSegment.isNotBlank() && lastSegment.contains('.')) {
-                        fileName = lastSegment
-                    } else {
-                        val ext = if (mimeType != null) android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) else null
-                        fileName = "downloaded_" + System.currentTimeMillis() + (if (ext != null) ".$ext" else ".bin")
-                    }
+    fun downloadFile(
+        url: String,
+        contentDisposition: String? = null,
+        mimeType: String? = null,
+        customFileName: String? = null
+    ) {
+        val taskId = java.util.UUID.randomUUID().toString()
+
+        var fileName = customFileName?.trim()
+        if (fileName.isNullOrBlank()) {
+            fileName = URLUtil.guessFileName(url, contentDisposition, mimeType)
+            if (fileName.isNullOrBlank() || fileName == "downloadfile.bin") {
+                val urlPath = try { URL(url).path } catch (e: Exception) { "" }
+                val lastSegment = urlPath.substringAfterLast('/')
+                if (lastSegment.isNotBlank() && lastSegment.contains('.')) {
+                    fileName = lastSegment
+                } else {
+                    val ext = if (mimeType != null) android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType) else null
+                    fileName = "downloaded_" + System.currentTimeMillis() + (if (ext != null) ".$ext" else ".bin")
                 }
-                
+            }
+        }
+
+        val detectedMime = mimeType ?: run {
+            val ext = fileName.substringAfterLast('.', "")
+            if (ext.isNotBlank()) {
+                android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.lowercase()) ?: "application/octet-stream"
+            } else {
+                "application/octet-stream"
+            }
+        }
+
+        val initialTask = com.example.data.DownloadTask(
+            id = taskId,
+            fileName = fileName,
+            url = url,
+            mimeType = detectedMime,
+            progress = 0,
+            status = com.example.data.DownloadStatus.DOWNLOADING
+        )
+
+        _activeDownloads.update { current -> listOf(initialTask) + current.filterNot { it.id == taskId } }
+
+        val job = viewModelScope.launch(Dispatchers.IO) {
+            try {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(getApplication(), "Starting download: $fileName", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(getApplication(), "開始下載：$fileName", Toast.LENGTH_SHORT).show()
                 }
 
-                val u = URL(url)
-                val conn = u.openConnection() as HttpURLConnection
+                val dir = getApplication<Application>().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                    ?: getApplication<Application>().filesDir
+                if (!dir.exists()) {
+                    dir.mkdirs()
+                }
+
+                val targetFile = File(dir, fileName)
+
+                val conn = URL(url).openConnection() as HttpURLConnection
                 conn.requestMethod = "GET"
                 conn.connectTimeout = 15000
                 conn.readTimeout = 15000
                 conn.connect()
-                
+
                 val responseCode = conn.responseCode
                 if (responseCode in 200..299) {
-                    val contentLength = conn.contentLength.toLong()
-                    val inputStream = conn.inputStream
-                    
-                    // Save to Environment.DIRECTORY_DOWNLOADS inside app's external files directory so no runtime permission is required
-                    val dir = getApplication<Application>().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-                        ?: getApplication<Application>().filesDir
-                    if (!dir.exists()) {
-                        dir.mkdirs()
-                    }
-                    
-                    val file = File(dir, fileName)
-                    
-                    var totalBytesRead = 0L
-                    conn.inputStream.use { inputStream ->
-                        FileOutputStream(file).use { outputStream ->
-                            val buffer = ByteArray(4096)
+                    val totalBytes = conn.contentLength.toLong()
+                    var bytesDownloaded = 0L
+                    var lastTime = System.currentTimeMillis()
+                    var lastBytes = 0L
+
+                    java.io.BufferedInputStream(conn.inputStream, 16384).use { inputStream ->
+                        java.io.BufferedOutputStream(FileOutputStream(targetFile), 16384).use { outputStream ->
+                            val buffer = ByteArray(16384)
                             var bytesRead: Int
-                            
+
                             while (inputStream.read(buffer).also { bytesRead = it } != -1) {
                                 outputStream.write(buffer, 0, bytesRead)
-                                totalBytesRead += bytesRead
+                                bytesDownloaded += bytesRead
+
+                                val currentTime = System.currentTimeMillis()
+                                val timeDiff = currentTime - lastTime
+                                if (timeDiff >= 500 || bytesDownloaded == totalBytes) {
+                                    val bytesDiff = bytesDownloaded - lastBytes
+                                    val speedKbps = if (timeDiff > 0) (bytesDiff / 1024f) / (timeDiff / 1000f) else 0f
+                                    val progress = if (totalBytes > 0) ((bytesDownloaded * 100) / totalBytes).toInt().coerceIn(0, 100) else 50
+
+                                    _activeDownloads.update { tasks ->
+                                        tasks.map { t ->
+                                            if (t.id == taskId) {
+                                                t.copy(
+                                                    progress = progress,
+                                                    bytesDownloaded = bytesDownloaded,
+                                                    totalBytes = totalBytes,
+                                                    speedKbps = speedKbps
+                                                )
+                                            } else t
+                                        }
+                                    }
+
+                                    lastTime = currentTime
+                                    lastBytes = bytesDownloaded
+                                }
                             }
+                            outputStream.flush()
                         }
                     }
-                    
+
+                    _activeDownloads.update { tasks ->
+                        tasks.map { t ->
+                            if (t.id == taskId) {
+                                t.copy(
+                                    progress = 100,
+                                    bytesDownloaded = bytesDownloaded,
+                                    totalBytes = if (totalBytes > 0) totalBytes else bytesDownloaded,
+                                    status = com.example.data.DownloadStatus.COMPLETED,
+                                    localPath = targetFile.absolutePath
+                                )
+                            } else t
+                        }
+                    }
+
                     repository.addDownloadedFile(
                         fileName = fileName,
                         url = url,
-                        mimeType = mimeType ?: "application/octet-stream",
-                        localPath = file.absolutePath,
-                        fileSize = if (contentLength > 0) contentLength else totalBytesRead
+                        mimeType = detectedMime,
+                        localPath = targetFile.absolutePath,
+                        fileSize = if (totalBytes > 0) totalBytes else bytesDownloaded
                     )
-                    
+
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(getApplication(), "Downloaded to watch: $fileName", Toast.LENGTH_LONG).show()
+                        Toast.makeText(getApplication(), "下載成功：$fileName", Toast.LENGTH_SHORT).show()
                     }
                 } else {
+                    _activeDownloads.update { tasks ->
+                        tasks.map { t ->
+                            if (t.id == taskId) {
+                                t.copy(
+                                    status = com.example.data.DownloadStatus.FAILED,
+                                    errorMessage = "HTTP $responseCode"
+                                )
+                            } else t
+                        }
+                    }
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(getApplication(), "Download failed: HTTP $responseCode", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(getApplication(), "下載失敗：HTTP $responseCode", Toast.LENGTH_SHORT).show()
                     }
                 }
             } catch (e: Exception) {
-                e.printStackTrace()
-                withContext(Dispatchers.Main) {
-                    Toast.makeText(getApplication(), "Download failed: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                _activeDownloads.update { tasks ->
+                    tasks.map { t ->
+                        if (t.id == taskId) {
+                            t.copy(
+                                status = com.example.data.DownloadStatus.FAILED,
+                                errorMessage = e.localizedMessage
+                            )
+                        } else t
+                    }
                 }
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), "下載發生錯誤：${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            } finally {
+                downloadJobs.remove(taskId)
             }
+        }
+
+        downloadJobs[taskId] = job
+    }
+
+    fun pauseDownload(taskId: String) {
+        downloadJobs[taskId]?.cancel()
+        downloadJobs.remove(taskId)
+        _activeDownloads.update { tasks ->
+            tasks.map { t ->
+                if (t.id == taskId) t.copy(status = com.example.data.DownloadStatus.PAUSED, speedKbps = 0f) else t
+            }
+        }
+        Toast.makeText(getApplication(), "已暫停下載", Toast.LENGTH_SHORT).show()
+    }
+
+    fun resumeDownload(taskId: String) {
+        val task = _activeDownloads.value.find { it.id == taskId } ?: return
+        downloadFile(task.url, null, task.mimeType, task.fileName)
+    }
+
+    fun cancelDownload(taskId: String) {
+        downloadJobs[taskId]?.cancel()
+        downloadJobs.remove(taskId)
+        _activeDownloads.update { tasks ->
+            tasks.filterNot { it.id == taskId }
+        }
+        Toast.makeText(getApplication(), "已取消下載任務", Toast.LENGTH_SHORT).show()
+    }
+
+    fun clearCompletedDownloads() {
+        _activeDownloads.update { tasks ->
+            tasks.filter { it.status == com.example.data.DownloadStatus.DOWNLOADING || it.status == com.example.data.DownloadStatus.PAUSED }
         }
     }
 
@@ -522,16 +863,57 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
                 }
                 repository.removeDownloadedFile(id)
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(getApplication(), "File deleted", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(getApplication(), "檔案已刪除", Toast.LENGTH_SHORT).show()
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(getApplication(), "Error deleting: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(getApplication(), "刪除失敗：${e.localizedMessage}", Toast.LENGTH_SHORT).show()
                 }
             }
         }
     }
+
+    fun clearAllDownloadedFiles() {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val files = downloadedFiles.value
+                files.forEach { file ->
+                    val f = File(file.localPath)
+                    if (f.exists()) f.delete()
+                    repository.removeDownloadedFile(file.id)
+                }
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(getApplication(), "已清空所有下載紀錄與檔案", Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    fun getStorageUsageInfo(): com.example.data.StorageUsageInfo {
+        return try {
+            val downloadsDir = getApplication<Application>().getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+                ?: getApplication<Application>().filesDir
+            var dirSize = 0L
+            downloadsDir.listFiles()?.forEach { if (it.isFile) dirSize += it.length() }
+
+            val stat = android.os.StatFs(downloadsDir.path)
+            val totalBytes = stat.totalBytes
+            val availableBytes = stat.availableBytes
+            val usedBytes = (totalBytes - availableBytes).coerceAtLeast(0L)
+
+            com.example.data.StorageUsageInfo(
+                usedBytes = usedBytes,
+                totalBytes = totalBytes,
+                downloadsFolderBytes = dirSize
+            )
+        } catch (e: Exception) {
+            com.example.data.StorageUsageInfo(0L, 0L, 0L)
+        }
+    }
+
 
     fun addToHistory(url: String, title: String) {
         if (url.isBlank() || url == "about:blank" || url.startsWith("file://") || url == "pixelbrowser://home" || url.startsWith("pixelbrowser://")) return
@@ -660,6 +1042,14 @@ class BrowserViewModel(application: Application) : AndroidViewModel(application)
         powerSaveReceiver?.let { receiver ->
             try {
                 getApplication<Application>().unregisterReceiver(receiver)
+            } catch (e: Exception) {
+                // Ignore unregistration errors
+            }
+        }
+        networkCallback?.let { callback ->
+            try {
+                val cm = getApplication<Application>().getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                cm?.unregisterNetworkCallback(callback)
             } catch (e: Exception) {
                 // Ignore unregistration errors
             }

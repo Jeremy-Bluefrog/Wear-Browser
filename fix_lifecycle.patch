@@ -1,0 +1,21 @@
+--- app/src/main/java/com/example/ui/BrowserScreen.kt
++++ app/src/main/java/com/example/ui/BrowserScreen.kt
+@@ -235,16 +235,15 @@
+         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+             try {
+                 when (event) {
+                     androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
+                         webViewRef?.onPause()
+                         webViewRef?.pauseTimers()
+                     }
+                     androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                         if (currentUrl != "pixelbrowser://home") {
+                             webViewRef?.onResume()
+                             webViewRef?.resumeTimers()
+                         }
+                     }
+-                        }
+-                    }
++                    else -> {}
+                 }
+             } catch (e: Exception) {

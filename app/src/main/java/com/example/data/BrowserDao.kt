@@ -21,6 +21,24 @@ interface BrowserDao {
     @Query("DELETE FROM bookmarks WHERE url = :url")
     suspend fun deleteBookmark(url: String)
 
+    @Query("SELECT * FROM offline_pages ORDER BY timestamp DESC")
+    fun getAllOfflinePages(): Flow<List<OfflinePage>>
+
+    @Query("SELECT * FROM offline_pages WHERE url = :url LIMIT 1")
+    suspend fun getOfflinePageByUrl(url: String): OfflinePage?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOfflinePage(page: OfflinePage)
+
+    @Query("DELETE FROM offline_pages WHERE id = :id")
+    suspend fun deleteOfflinePage(id: Long)
+
+    @Query("DELETE FROM offline_pages WHERE url = :url")
+    suspend fun deleteOfflinePageByUrl(url: String)
+
+    @Query("DELETE FROM offline_pages")
+    suspend fun clearAllOfflinePages()
+
     @Query("SELECT * FROM downloaded_files ORDER BY timestamp DESC")
     fun getAllDownloadedFiles(): Flow<List<DownloadedFile>>
 

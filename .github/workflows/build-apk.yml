@@ -1,0 +1,118 @@
+name: Build Wear OS APK (armeabi-v7a)
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: '選擇要建置的 APK 類型 (all / debug / release)'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - debug
+          - release
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build APK (armeabi-v7a)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 檢出程式碼 (Checkout Code)
+        uses: actions/checkout@v4
+
+      - name: 設定 JDK 17 (Setup Java 17)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 設定 Gradle (Setup Gradle)
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: 準備簽署金鑰 (Prepare Keystore)
+        run: |
+          echo "=== 設定 Debug 與 Release 簽署金鑰 ==="
+          # 1. 復原 Debug Keystore (若有 base64 則還原，若無則自動生成)
+          if [ -f "debug.keystore.base64" ]; then
+            base64 -d debug.keystore.base64 > debug.keystore
+            echo "已從 debug.keystore.base64 還原 debug.keystore"
+          elif [ ! -f "debug.keystore" ]; then
+            keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+            echo "已自動生成 debug.keystore"
+          fi
+
+          # 2. 準備 Release Keystore (若環境未提供自訂 KEYSTORE_PATH 則生成預設 release key 以保證成功構建)
+          if [ ! -f "my-upload-key.jks" ] && [ -z "$KEYSTORE_PATH" ]; then
+            keytool -genkey -v -keystore my-upload-key.jks -storepass android -alias upload -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Pixel Browser,O=WearOS,C=US"
+            echo "已自動生成 my-upload-key.jks"
+          fi
+
+      - name: 賦予 Gradlew 執行權限 (Set Executable Permissions)
+        run: chmod +x gradlew
+
+      - name: 建置 Debug APK (Build Debug APK)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'debug' }}
+        env:
+          STORE_PASSWORD: "android"
+          KEY_PASSWORD: "android"
+        run: |
+          ./gradlew assembleDebug --stacktrace
+
+      - name: 建置 Release APK (Build Release APK)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'release' }}
+        env:
+          STORE_PASSWORD: "android"
+          KEY_PASSWORD: "android"
+        run: |
+          ./gradlew assembleRelease --stacktrace
+
+      - name: 整理輸出 APK 檔案 (Collect Artifacts)
+        run: |
+          mkdir -p output-apks
+          # 複製 Debug APK
+          if compgen -G "app/build/outputs/apk/debug/*.apk" > /dev/null; then
+            cp app/build/outputs/apk/debug/*.apk output-apks/PixelBrowser-WearOS-armeabi-v7a-debug.apk
+            echo "已收集 Debug APK"
+          fi
+          # 複製 Release APK
+          if compgen -G "app/build/outputs/apk/release/*.apk" > /dev/null; then
+            cp app/build/outputs/apk/release/*.apk output-apks/PixelBrowser-WearOS-armeabi-v7a-release.apk
+            echo "已收集 Release APK"
+          fi
+          ls -la output-apks/
+
+      - name: 上傳 APK 構建成品 (Upload APK Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelBrowser-WearOS-armeabi-v7a-APKs
+          path: output-apks/*.apk
+          retention-days: 30
+
+      - name: 發布 GitHub Release (Publish Release on Tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: output-apks/*.apk
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

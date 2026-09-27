@@ -1,0 +1,16 @@
+--- app/src/main/java/com/example/ui/BrowserScreen.kt
++++ app/src/main/java/com/example/ui/BrowserScreen.kt
+@@ -1333,8 +1333,9 @@
+         },
+-        onRelease = { webView ->
+-            webView.stopLoading()
+-            webView.clearHistory()
+-            webView.removeAllViews()
+-            webView.destroy()
++        onRelease = { container ->
++            val webView = container.getChildAt(0) as? WebView
++            webView?.stopLoading()
++            webView?.clearHistory()
++            webView?.removeAllViews()
++            webView?.destroy()
+         },

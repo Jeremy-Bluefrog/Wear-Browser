@@ -21,6 +21,11 @@ android {
     versionCode = 1
     versionName = "1.0"
 
+    ndk {
+      abiFilters.clear()
+      abiFilters.add("armeabi-v7a")
+    }
+
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
@@ -96,6 +101,12 @@ dependencies {
   implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui)
+  implementation(libs.jsoup)
+  val geckoviewVersion = "99.0.20220324185704"
+  implementation("org.mozilla.geckoview:geckoview-beta-armeabi-v7a:$geckoviewVersion")
+  // implementation("org.mozilla.geckoview:geckoview-beta-arm64-v8a:$geckoviewVersion")
+  // implementation("org.mozilla.geckoview:geckoview-beta-x86_64:$geckoviewVersion")
+  // implementation("org.mozilla.geckoview:geckoview-beta-x86:$geckoviewVersion")
   implementation(libs.androidx.compose.ui.graphics)
   implementation("androidx.compose.foundation:foundation")
   implementation("androidx.compose.foundation:foundation-layout")
@@ -142,4 +153,14 @@ dependencies {
   "ksp"(libs.androidx.room.compiler)
   // "ksp"(libs.moshi.kotlin.codegen)
 }
+
+configurations.all {
+  resolutionStrategy.capabilitiesResolution.withCapability("org.mozilla.geckoview:geckoview") {
+    val target = candidates.find { it.id.toString().contains("armeabi-v7a") } 
+      ?: candidates.find { it.id.toString().contains("arm64-v8a") } 
+      ?: candidates.first()
+    select(target)
+  }
+}
+
 

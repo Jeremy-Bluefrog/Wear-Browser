@@ -4,9 +4,38 @@ import kotlinx.coroutines.flow.Flow
 
 class BrowserRepository(private val dao: BrowserDao) {
     val bookmarks: Flow<List<Bookmark>> = dao.getAllBookmarks()
+    val offlinePages: Flow<List<OfflinePage>> = dao.getAllOfflinePages()
     val downloadedFiles: Flow<List<DownloadedFile>> = dao.getAllDownloadedFiles()
     val history: Flow<List<HistoryEntry>> = dao.getAllHistory()
     val searchHistory: Flow<List<SearchHistory>> = dao.getAllSearchHistory()
+
+    suspend fun getOfflinePageByUrl(url: String): OfflinePage? {
+        return dao.getOfflinePageByUrl(url)
+    }
+
+    suspend fun saveOfflinePage(url: String, title: String, localPath: String, textSnippet: String, fileSize: Long) {
+        dao.insertOfflinePage(
+            OfflinePage(
+                url = url,
+                title = title.ifBlank { url },
+                localPath = localPath,
+                textSnippet = textSnippet,
+                fileSize = fileSize
+            )
+        )
+    }
+
+    suspend fun removeOfflinePage(id: Long) {
+        dao.deleteOfflinePage(id)
+    }
+
+    suspend fun removeOfflinePageByUrl(url: String) {
+        dao.deleteOfflinePageByUrl(url)
+    }
+
+    suspend fun clearAllOfflinePages() {
+        dao.clearAllOfflinePages()
+    }
 
     suspend fun addBookmark(url: String, title: String) {
         dao.insertBookmark(Bookmark(url, title))

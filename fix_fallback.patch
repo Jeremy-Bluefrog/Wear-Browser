@@ -1,0 +1,79 @@
+--- app/src/main/java/com/example/ui/BrowserScreen.kt
++++ app/src/main/java/com/example/ui/BrowserScreen.kt
+@@ -334,13 +334,15 @@
+                                                 Modifier.background(if (isDeepMode) Color.Black else Color.White)
+                                             }
+                                         )
+                                 ) {
+-                                    WebViewComponent(
++                                    var webViewFailed by remember { mutableStateOf(false) }
++                                    if (!webViewFailed) {
++                                        WebViewComponent(
+                                             url = currentUrl,
+                                             isPowerSaving = isPowerSavingMode,
+                                             textZoom = textZoom,
+                                             isCloudRendering = isCloudRendering,
+                                             isTextOnly = isTextOnly,
+                                             isAggressiveCaching = isAggressiveCaching,
+                                             isAdBlockEnabled = isAdBlockEnabled,
+                                             isCpuThrottleEnabled = isCpuThrottleEnabled,
+@@ -377,20 +379,30 @@
+                                             },
+                                             onWebViewCreated = { webView ->
+                                                 webViewRef = webView
+                                                 if (isCpuThrottleEnabled) {
+                                                     webView.settings.setRenderPriority(android.webkit.WebSettings.RenderPriority.LOW)
+                                                 }
+                                                 canGoBack = webView.canGoBack()
+                                                 canGoForward = webView.canGoForward()
+                                             },
+                                             onDownloadRequested = { url, contentDisposition, mimetype ->
+                                                 showDownloadDialog = true
+                                                 downloadUrl = url
+-                                        }
+-                                    )
++                                            },
++                                            onWebViewFailed = {
++                                                webViewFailed = true
++                                            }
++                                        )
++                                    } else {
++                                        NativeTextReader(
++                                            url = currentUrl,
++                                            isDeepMode = isDeepMode,
++                                            isSerifFont = isSerifFont
++                                        )
++                                    }
+                                     
+                                     if (isLoading && loadProgress < 100) {
+                                         LinearProgressIndicator(
+@@ -833,14 +845,15 @@
+     bypassedHosts: Set<String>,
+     onUnsafeSiteDetected: (String, ThreatType) -> Unit,
+     onPageStarted: () -> Unit,
+     onPageFinished: (String?, String?) -> Unit,
+     onProgressChanged: (Int) -> Unit,
+     onWebViewCreated: (WebView) -> Unit,
+     onDownloadRequested: (String, String?, String?) -> Unit,
+-    onAdBlocked: () -> Unit = {}
++    onAdBlocked: () -> Unit = {},
++    onWebViewFailed: () -> Unit = {}
+ ) {
+     val lastLoadedUrl = remember { arrayOf("") }
+ 
+     AndroidView(
+         factory = { context ->
+@@ -1274,13 +1287,14 @@
+                 container.addView(webView)
+             } catch (e: Throwable) {
+                 val errorView = android.widget.TextView(context).apply {
+                     text = "無法載入瀏覽器引擎。請確定您的手錶已安裝並啟用「Android System WebView」。\n\n錯誤: ${e.message}"
+                     setTextColor(android.graphics.Color.WHITE)
+                     gravity = android.view.Gravity.CENTER
+                     setPadding(32, 32, 32, 32)
+                 }
+                 container.addView(errorView)
++                onWebViewFailed()
+             }
+             container
+         },

@@ -1,10 +1,15 @@
 package com.example.ui
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.material3.OutlinedTextField
+import androidx.wear.compose.material.CompactChip
+import androidx.wear.compose.material.ChipDefaults
+import androidx.wear.compose.material3.CardDefaults
 import android.graphics.Bitmap
 import android.os.Build
-import android.view.Surface
 import android.app.RemoteInput
 import androidx.wear.input.RemoteInputIntentHelper
 import android.webkit.WebResourceRequest
@@ -18,10 +23,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -64,22 +73,28 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.constraintlayout.compose.ConstraintLayout
 import androidx.wear.compose.material3.*
 import androidx.compose.material.icons.automirrored.filled.*
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.ScalingLazyColumnDefaults
 import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
+import androidx.wear.compose.foundation.rotary.RotaryScrollableDefaults
+import androidx.wear.compose.foundation.rotary.rotaryScrollable
 import androidx.wear.compose.material.PositionIndicator
 import androidx.compose.ui.draw.clip
 import com.example.data.*
+import com.example.wear.WearGestureDetector
 import coil.compose.AsyncImage
+import coil.request.CachePolicy
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import java.net.URLEncoder
 
 enum class ScreenState {
-    MENU, HOME, BROWSER, HISTORY
+    MENU, HOME, BROWSER, HISTORY, OFFLINE_PAGES
 }
 
 enum class ThreatType {
@@ -129,8 +144,11 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     val isDeepMode by viewModel.isDeepMode.collectAsStateWithLifecycle()
     val isPowerSavingMode by viewModel.isPowerSavingMode.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
+    val offlinePages by viewModel.offlinePages.collectAsStateWithLifecycle()
+    val isOnline by viewModel.isOnline.collectAsStateWithLifecycle()
     val localBookmarks by viewModel.localBookmarks.collectAsStateWithLifecycle()
     val downloadedFiles by viewModel.downloadedFiles.collectAsStateWithLifecycle()
+    val activeDownloads by viewModel.activeDownloads.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
     val searchHistory by viewModel.searchHistory.collectAsStateWithLifecycle()
     val textZoom by viewModel.textZoom.collectAsStateWithLifecycle()
@@ -147,6 +165,9 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     val isForceHttpsEnabled by viewModel.isForceHttpsEnabled.collectAsStateWithLifecycle()
     val isBlockThirdPartyCookiesEnabled by viewModel.isBlockThirdPartyCookiesEnabled.collectAsStateWithLifecycle()
     val imageCacheSize by viewModel.imageCacheSize.collectAsStateWithLifecycle()
+    var showDownloadDialog by remember { mutableStateOf(false) }
+    var downloadUrl by remember { mutableStateOf("") }
+
     val voiceCacheSize by viewModel.voiceCacheSize.collectAsStateWithLifecycle()
     val blockedAdsCount by viewModel.blockedAdsCount.collectAsStateWithLifecycle()
     val ttsSpeechRate by viewModel.ttsSpeechRate.collectAsStateWithLifecycle()
@@ -155,10 +176,16 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     val lineHeightMultiplier by viewModel.lineHeightMultiplier.collectAsStateWithLifecycle()
     val isParagraphIndent by viewModel.isParagraphIndent.collectAsStateWithLifecycle()
     val isJustifyAlign by viewModel.isJustifyAlign.collectAsStateWithLifecycle()
+
+    val isOneHandedGesturesEnabled by viewModel.isOneHandedGesturesEnabled.collectAsStateWithLifecycle()
+    val gestureSensitivity by viewModel.gestureSensitivity.collectAsStateWithLifecycle()
+    val gestureHudMessage by viewModel.gestureHudMessage.collectAsStateWithLifecycle()
     
     var showMenu by remember { mutableStateOf(false) }
     var showSearchDialog by remember { mutableStateOf(false) }
     var showQrDialog by remember { mutableStateOf(false) }
+    var showHomeSettingsDialog by remember { mutableStateOf(false) }
+    var showHomeDownloadsDialog by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     
     var showSecurityWarning by remember { mutableStateOf(false) }
@@ -172,6 +199,99 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     var webViewRef by remember { mutableStateOf<WebView?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
     var canGoForward by remember { mutableStateOf(false) }
+
+    val gestureVoiceLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == android.app.Activity.RESULT_OK) {
+            var spokenText = result.data?.getStringArrayListExtra(android.speech.RecognizerIntent.EXTRA_RESULTS)?.get(0)
+            if (spokenText == null) {
+                val results = android.app.RemoteInput.getResultsFromIntent(result.data)
+                spokenText = results?.getCharSequence("input_result")?.toString()
+            }
+            if (!spokenText.isNullOrBlank()) {
+                val isWeb = spokenText.startsWith("http://") || spokenText.startsWith("https://") || (spokenText.contains(".") && !spokenText.contains(" "))
+                viewModel.navigateTo(if (isWeb) {
+                    if (spokenText.startsWith("http://") || spokenText.startsWith("https://")) spokenText else "https://$spokenText"
+                } else {
+                    val encoded = java.net.URLEncoder.encode(spokenText, "UTF-8")
+                    "https://www.google.com/search?q=$encoded"
+                })
+            }
+        }
+    }
+
+    val gestureDetector = remember(context) {
+        WearGestureDetector(context, object : WearGestureDetector.GestureListener {
+            override fun onPrimaryAction() {
+                if (currentUrl == "pixelbrowser://home") {
+                    viewModel.showGestureHud("🖐️ 雙指捏合：語音搜尋")
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    try {
+                        val intent = com.example.wear.WearOsCompatLayer.getSafeVoiceSearchIntent()
+                        gestureVoiceLauncher.launch(intent)
+                    } catch (e: Exception) {
+                        showSearchDialog = true
+                    }
+                } else {
+                    viewModel.showGestureHud("🖐️ 雙指捏合：網頁朗讀")
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    if (isSpeaking) {
+                        viewModel.stopSpeaking()
+                    } else {
+                        webViewRef?.evaluateJavascript(
+                            "(function() { return document.body.innerText; })();"
+                        ) { text ->
+                            val cleanText = text?.removeSurrounding("\"")
+                                ?.replace("\\n", "\n")
+                                ?.replace("\\\"", "\"")
+                                ?.replace("\\\\", "\\")
+                            if (!cleanText.isNullOrBlank()) {
+                                viewModel.speakText(cleanText)
+                            }
+                        }
+                    }
+                }
+            }
+
+            override fun onDismissAction() {
+                if (showSearchDialog || showMenu || showSecurityWarning || showQrDialog || showDownloadDialog) {
+                    showSearchDialog = false
+                    showMenu = false
+                    showSecurityWarning = false
+                    showQrDialog = false
+                    showDownloadDialog = false
+                    viewModel.showGestureHud("↩️ 翻轉手腕：關閉面板")
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                } else if (currentUrl != "pixelbrowser://home") {
+                    if (canGoBack) {
+                        webViewRef?.goBack()
+                    } else {
+                        viewModel.navigateTo("pixelbrowser://home")
+                    }
+                    viewModel.showGestureHud("↩️ 翻轉手腕：返回")
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                } else {
+                    viewModel.showGestureHud("↩️ 翻轉手腕：已在首頁")
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                }
+            }
+        })
+    }
+
+    LaunchedEffect(isOneHandedGesturesEnabled, gestureSensitivity) {
+        gestureDetector.isEnabled = isOneHandedGesturesEnabled
+        gestureDetector.sensitivity = when (gestureSensitivity) {
+            "高靈敏度" -> WearGestureDetector.Sensitivity.HIGH
+            "低靈敏度" -> WearGestureDetector.Sensitivity.LOW
+            else -> WearGestureDetector.Sensitivity.STANDARD
+        }
+        if (isOneHandedGesturesEnabled) {
+            gestureDetector.start()
+        } else {
+            gestureDetector.stop()
+        }
+    }
  
     BackHandler(enabled = showSecurityWarning) {
         showSecurityWarning = false
@@ -206,39 +326,44 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     }
 
     // WebView RAM Optimizer and Lifecycle Pause/Resume based on screen visibility
-    LaunchedEffect(currentUrl) {
+    LaunchedEffect(currentUrl, webViewRef) {
         if (currentUrl == "pixelbrowser://home") {
-            if (isSmartRamCleanerEnabled) {
-                try {
-                    webViewRef?.onPause()
-                    System.gc() // Actively trigger GC to clean up Java objects
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+            try {
+                webViewRef?.onPause()
+                webViewRef?.pauseTimers()
+                webViewRef?.visibility = android.view.View.GONE
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         } else {
             try {
+                webViewRef?.visibility = android.view.View.VISIBLE
                 webViewRef?.onResume()
+                webViewRef?.resumeTimers()
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
     }
 
-    // Lifecycle-aware WebView optimization: pause JavaScript execution and timers when the app goes to the background
+    // Lifecycle-aware WebView and Gesture detector optimization
     val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    DisposableEffect(lifecycleOwner, webViewRef) {
+    DisposableEffect(lifecycleOwner, webViewRef, gestureDetector, isOneHandedGesturesEnabled) {
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             try {
                 when (event) {
                     androidx.lifecycle.Lifecycle.Event.ON_PAUSE -> {
                         webViewRef?.onPause()
                         webViewRef?.pauseTimers()
+                        gestureDetector.stop()
                     }
                     androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
                         if (currentUrl != "pixelbrowser://home") {
                             webViewRef?.onResume()
                             webViewRef?.resumeTimers()
+                        }
+                        if (isOneHandedGesturesEnabled) {
+                            gestureDetector.start()
                         }
                     }
                     else -> {}
@@ -250,6 +375,7 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+            gestureDetector.stop()
         }
     }
 
@@ -257,6 +383,7 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
         showMenu -> ScreenState.MENU
         currentUrl == "pixelbrowser://home" -> ScreenState.HOME
         currentUrl == "pixelbrowser://history" -> ScreenState.HISTORY
+        currentUrl == "pixelbrowser://offline" -> ScreenState.OFFLINE_PAGES
         else -> ScreenState.BROWSER
     }
 
@@ -265,46 +392,410 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
 
     AppScaffold {
         ConstraintLayout(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
-            val (contentRef, bottomTriggerRef, bottomIndicatorRef, pageIndicatorRef) = createRefs()
+            val (contentRef, bottomTriggerRef, bottomIndicatorRef, pageIndicatorRef, gestureHudRef) = createRefs()
             
-            AnimatedContent(
-                targetState = screenState,
-                transitionSpec = {
-                    val slideIn = slideIntoContainer(
-                        towards = AnimatedContentTransitionScope.SlideDirection.Start,
-                        animationSpec = tween(durationMillis = 300)
-                    )
-                    val slideOut = slideOutOfContainer(
-                        towards = AnimatedContentTransitionScope.SlideDirection.Start,
-                        animationSpec = tween(durationMillis = 300)
-                    )
-                    val popIn = slideIntoContainer(
-                        towards = AnimatedContentTransitionScope.SlideDirection.End,
-                        animationSpec = tween(durationMillis = 300)
-                    )
-                    val popOut = slideOutOfContainer(
-                        towards = AnimatedContentTransitionScope.SlideDirection.End,
-                        animationSpec = tween(durationMillis = 300)
-                    )
-                    
-                    if (initialState.ordinal < targetState.ordinal) {
-                        slideIn togetherWith slideOut
-                    } else {
-                        popIn togetherWith popOut
-                    }
-                },
-                label = "ScreenTransition",
+            Box(
                 modifier = Modifier.fillMaxSize().constrainAs(contentRef) {
                     top.linkTo(parent.top)
                     bottom.linkTo(parent.bottom)
                     start.linkTo(parent.start)
                     end.linkTo(parent.end)
                 }
-            ) { state ->
-                when (state) {
-                    ScreenState.MENU -> {
+            ) {
+                // ALWAYS render the browser in the background to preserve state and avoid lag
+                Box(
+                    modifier = Modifier.fillMaxSize()
+                        .graphicsLayer { alpha = if (screenState == ScreenState.BROWSER) 1f else 0f }
+                ) {
+                    val context = LocalContext.current
+                    
+                    val leftDragOffset = 0f
+                    val rightDragOffset = 0f
+                    val dragThresholdPx = with(androidx.compose.ui.platform.LocalDensity.current) { 50.dp.toPx() }
+
+                        val isScreenRound = androidx.compose.ui.platform.LocalConfiguration.current.isScreenRound
+                        val targetTopPadding = if (isScreenRound && isCircularSafeMode) 22.dp else 0.dp
+                        val targetBottomPadding = if (isScreenRound && isCircularSafeMode) 40.dp else 0.dp
+                        val targetSidePadding = if (isScreenRound && isCircularSafeMode) 20.dp else 0.dp
+
+                        val safeTopPadding by animateDpAsState(
+                            targetValue = targetTopPadding,
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                            label = "safeTopPadding"
+                        )
+                        val safeBottomPadding by animateDpAsState(
+                            targetValue = targetBottomPadding,
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                            label = "safeBottomPadding"
+                        )
+                        val safeSidePadding by animateDpAsState(
+                            targetValue = targetSidePadding,
+                            animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+                            label = "safeSidePadding"
+                        )
+
+                        var rotaryAccumulator by remember { mutableStateOf(0f) }
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(if (isDeepMode) Color.Black else MaterialTheme.colorScheme.background)
+                                .focusRequester(webViewFocusRequester)
+                                .focusable()
+                                .onRotaryScrollEvent {
+                                    val delta = it.verticalScrollPixels
+                                    webViewRef?.scrollBy(0, (delta * 1.5f).toInt())
+                                    rotaryAccumulator += kotlin.math.abs(delta)
+                                    if (rotaryAccumulator > 30f) {
+                                        rotaryAccumulator = 0f
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    }
+                                    true
+                                }
+                        ) {
+                            if (!showSecurityWarning) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .graphicsLayer {
+                                            translationX = leftDragOffset - rightDragOffset
+                                        }
+                                        .padding(
+                                            top = safeTopPadding,
+                                            bottom = safeBottomPadding,
+                                            start = safeSidePadding,
+                                            end = safeSidePadding
+                                        )
+                                        .then(
+                                            if (isScreenRound && isCircularSafeMode) {
+                                                Modifier
+                                                    .clip(RoundedCornerShape(16.dp))
+                                                    .background(if (isDeepMode) Color.Black else Color.White)
+                                                    .border(
+                                                        width = 1.dp,
+                                                        color = if (isDeepMode) Color.DarkGray.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f),
+                                                        shape = RoundedCornerShape(16.dp)
+                                                    )
+                                            } else {
+                                                Modifier.background(if (isDeepMode) Color.Black else Color.White)
+                                            }
+                                        )
+                                ) {
+                                    var webViewFailed by remember { mutableStateOf(false) }
+                                    if (!webViewFailed) {
+                                    WebViewComponent(
+                                        url = currentUrl,
+                                        isPowerSaving = isPowerSavingMode,
+                                        textZoom = textZoom,
+                                        isCloudRendering = isCloudRendering,
+                                        isTextOnly = isTextOnly,
+                                        isAggressiveCaching = isAggressiveCaching,
+                                        isAdBlockEnabled = isAdBlockEnabled,
+                                        isCpuThrottleEnabled = isCpuThrottleEnabled,
+                                        isPopupBlockingEnabled = isPopupBlockingEnabled,
+                                        isPhishingProtectionEnabled = isPhishingProtectionEnabled,
+                                        isBlockThirdPartyCookiesEnabled = isBlockThirdPartyCookiesEnabled,
+                                        isSerifFont = isSerifFont,
+                                        lineHeightMultiplier = lineHeightMultiplier,
+                                        isParagraphIndent = isParagraphIndent,
+                                        isJustifyAlign = isJustifyAlign,
+                                        bypassedHosts = bypassedHosts,
+                                        onUnsafeSiteDetected = { url, threat ->
+                                            unsafeUrlToLoad = url
+                                            threatTypeDetected = threat
+                                            showSecurityWarning = true
+                                        },
+                                        onAdBlocked = { viewModel.incrementBlockedAdsCount() },
+                                        onPageStarted = {
+                                            isLoading = true
+                                            loadProgress = 0
+                                        },
+                                        onPageFinished = { title, loadedUrl ->
+                                            isLoading = false
+                                            loadProgress = 100
+                                            pageTitle = title ?: ""
+                                            if (loadedUrl != null && loadedUrl != "about:blank") {
+                                                viewModel.updateUrlFromWebView(loadedUrl)
+                                                viewModel.addToHistory(loadedUrl, pageTitle)
+                                            } else {
+                                                viewModel.addToHistory(currentUrl, pageTitle)
+                                            }
+                                            canGoBack = webViewRef?.canGoBack() == true
+                                            canGoForward = webViewRef?.canGoForward() == true
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        },
+                                        onProgressChanged = { progress ->
+                                            loadProgress = progress
+                                            if (progress >= 100) {
+                                                isLoading = false
+                                            } else {
+                                                isLoading = true
+                                            }
+                                        },
+                                        onWebViewCreated = { webView ->
+                                            webViewRef = webView
+                                            if (isCpuThrottleEnabled) {
+                                                webView.settings.setRenderPriority(android.webkit.WebSettings.RenderPriority.LOW)
+                                            }
+                                            canGoBack = webView.canGoBack()
+                                            canGoForward = webView.canGoForward()
+                                        },
+                                        onDownloadRequested = { url, contentDisposition, mimetype ->
+                                            showDownloadDialog = true
+                                            downloadUrl = url
+                                        },
+                                        onWebViewFailed = { webViewFailed = true }
+                                    )
+                                    } else {
+                                        NativeTextReader(
+                                            url = currentUrl,
+                                            isDeepMode = isDeepMode,
+                                            isSerifFont = isSerifFont
+                                        )
+                                    }
+                                    
+                                    if (isLoading && loadProgress < 100) {
+                                        if (!isScreenRound) {
+                                            androidx.compose.material3.LinearProgressIndicator(
+                                                progress = { loadProgress / 100f },
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .height(5.dp)
+                                                    .clip(RoundedCornerShape(3.dp))
+                                                    .align(Alignment.TopCenter),
+                                                color = MaterialTheme.colorScheme.primary,
+                                                trackColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f)
+                                            )
+                                        }
+                                    }
+                                }
+
+                                // 圓形螢幕頂部專屬弧形載入進度條
+                                if (isScreenRound && isLoading && loadProgress < 100) {
+                                    val primaryColor = MaterialTheme.colorScheme.primary
+                                    val trackColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                                    val progressFraction = (loadProgress / 100f).coerceIn(0f, 1f)
+
+                                    androidx.compose.foundation.Canvas(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(3.dp)
+                                    ) {
+                                        val strokeWidth = 4.dp.toPx()
+                                        val startAngle = 220f
+                                        val sweepTotal = 100f
+                                        // 繪製背景弧線
+                                        drawArc(
+                                            color = trackColor,
+                                            startAngle = startAngle,
+                                            sweepAngle = sweepTotal,
+                                            useCenter = false,
+                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                width = strokeWidth,
+                                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                            )
+                                        )
+                                        // 繪製前進進度弧線
+                                        drawArc(
+                                            color = primaryColor,
+                                            startAngle = startAngle,
+                                            sweepAngle = sweepTotal * progressFraction,
+                                            useCenter = false,
+                                            style = androidx.compose.ui.graphics.drawscope.Stroke(
+                                                width = strokeWidth,
+                                                cap = androidx.compose.ui.graphics.StrokeCap.Round
+                                            )
+                                        )
+                                    }
+                                }
+
+                                // 圓形螢幕底部安全懸浮迷你導覽按鈕列 (避開圓弧底緣)
+                                if (screenState == ScreenState.BROWSER && currentUrl != "pixelbrowser://home") {
+                                    val bottomPillOffset = if (isScreenRound) 6.dp else 4.dp
+                                    Row(
+                                        modifier = Modifier
+                                            .align(Alignment.BottomCenter)
+                                            .padding(bottom = bottomPillOffset)
+                                            .background(
+                                                color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f),
+                                                shape = RoundedCornerShape(20.dp)
+                                            )
+                                            .border(
+                                                width = 1.dp,
+                                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f),
+                                                shape = RoundedCornerShape(20.dp)
+                                            )
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        // 返回/首頁按鈕
+                                        IconButton(
+                                            onClick = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                if (canGoBack) {
+                                                    webViewRef?.goBack()
+                                                } else {
+                                                    viewModel.navigateTo("pixelbrowser://home")
+                                                }
+                                            },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (canGoBack) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Home,
+                                                contentDescription = if (canGoBack) "上一頁" else "主頁",
+                                                tint = MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+
+                                        // 重新整理按鈕
+                                        IconButton(
+                                            onClick = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                webViewRef?.reload()
+                                            },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Refresh,
+                                                contentDescription = "重新整理",
+                                                tint = MaterialTheme.colorScheme.onSurface,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+
+                                        // 圓形安全視區快速切換
+                                        if (isScreenRound) {
+                                            IconButton(
+                                                onClick = {
+                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    viewModel.toggleCircularSafeMode()
+                                                },
+                                                modifier = Modifier.size(30.dp)
+                                            ) {
+                                                Icon(
+                                                    imageVector = if (isCircularSafeMode) Icons.Default.FitScreen else Icons.Default.Fullscreen,
+                                                    contentDescription = "圓形安全視區開關",
+                                                    tint = if (isCircularSafeMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    modifier = Modifier.size(16.dp)
+                                                )
+                                            }
+                                        }
+
+                                        // 選單按鈕
+                                        IconButton(
+                                            onClick = {
+                                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                showMenu = true
+                                            },
+                                            modifier = Modifier.size(30.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Default.Menu,
+                                                contentDescription = "選單",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(16.dp)
+                                            )
+                                        }
+                                    }
+                                }
+                            } else {
+                                Box(
+                                    modifier = Modifier.fillMaxSize().background(Color(0xFF8B0000).copy(alpha = 0.85f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    val listState = rememberScalingLazyListState()
+                                    ScalingLazyColumn(
+                                        state = listState,
+                                        modifier = Modifier.fillMaxSize().padding(horizontal = 8.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        item {
+                                            Spacer(modifier = Modifier.height(16.dp))
+                                            Icon(Icons.Default.Warning, contentDescription = null, tint = Color.White, modifier = Modifier.size(48.dp))
+                                        }
+                                        item {
+                                            val title = when (threatTypeDetected) {
+                                                ThreatType.PHISHING -> "可疑的釣魚網站"
+                                                ThreatType.MALWARE -> "惡意軟體警告"
+                                                else -> "不安全的網站"
+                                            }
+                                            val desc = when (threatTypeDetected) {
+                                                ThreatType.PHISHING -> "此網站可能會誘騙您透露密碼或信用卡等個人資訊。"
+                                                ThreatType.MALWARE -> "此網站可能會嘗試在您的裝置上安裝危險軟體。"
+                                                else -> "瀏覽此網站可能存在安全風險。"
+                                            }
+                                            Text(
+                                                text = title,
+                                                color = Color.White,
+                                                style = MaterialTheme.typography.titleMedium,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                            )
+                                        }
+                                        item {
+                                            Text(
+                                                text = "網址: $unsafeUrlToLoad",
+                                                color = Color.White.copy(alpha = 0.7f),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                            )
+                                        }
+                                        item {
+                                            Text(
+                                                text = "此網站可能會誘騙您透露密碼或信用卡等個人資訊。",
+                                                color = Color.White.copy(alpha = 0.9f),
+                                                style = MaterialTheme.typography.bodySmall,
+                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                                            )
+                                        }
+                                        item {
+                                            Spacer(modifier = Modifier.height(8.dp))
+                                        }
+                                        item {
+                                            Button(
+                                                onClick = {
+                                                    showSecurityWarning = false
+                                                    viewModel.navigateTo("pixelbrowser://home")
+                                                },
+                                                colors = ButtonDefaults.buttonColors(
+                                                    containerColor = Color.White,
+                                                    contentColor = Color(0xFF8B0000)
+                                                ),
+                                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                                            ) {
+                                                Text("返回安全主頁", style = MaterialTheme.typography.labelMedium)
+                                            }
+                                        }
+                                        item {
+                                            TextButton(
+                                                onClick = {
+                                                    val host = android.net.Uri.parse(unsafeUrlToLoad).host?.lowercase() ?: ""
+                                                    if (host.isNotEmpty()) {
+                                                        bypassedHosts = bypassedHosts + host
+                                                    }
+                                                    showSecurityWarning = false
+                                                    webViewRef?.loadUrl(unsafeUrlToLoad)
+                                                }
+                                            ) {
+                                                Text("仍要造訪 (不安全)", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                }
+                
+                // Overlay other screens
+                if (screenState != ScreenState.BROWSER) {
+                    Box(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+                        when (screenState) {
+                            ScreenState.MENU -> {
                     BookmarkMenu(
                         bookmarks = bookmarks,
+                        offlinePages = offlinePages,
                         downloadedFiles = downloadedFiles,
                         history = finalHistory,
                         searchHistory = finalSearchHistory,
@@ -314,6 +805,13 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                         currentUrl = currentUrl,
                         pageTitle = pageTitle,
                         onAddBookmark = { url, title -> viewModel.addBookmark(url, title) },
+                        onSaveOfflinePage = {
+                            viewModel.saveCurrentWebPage(
+                                url = currentUrl,
+                                title = pageTitle,
+                                webView = webViewRef
+                            )
+                        },
                         textZoom = textZoom,
                         onSetTextZoom = { zoom -> viewModel.setTextZoom(zoom) },
                         isSpeaking = isSpeaking,
@@ -396,53 +894,22 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                     HomeScreen(
                         bookmarks = bookmarks,
                         localBookmarks = localBookmarks,
-                        onAddLocalBookmark = { url, title -> viewModel.addLocalBookmark(url, title) },
-                        onDeleteLocalBookmark = { url -> viewModel.removeLocalBookmark(url) },
-                        downloadedFiles = downloadedFiles,
-                        onDeleteDownloadedFile = { id, path -> viewModel.deleteDownloadedFile(id, path) },
-                        history = finalHistory,
+                        offlinePages = offlinePages,
+                        isOnline = isOnline,
+                        onAddLocalBookmark = remember(viewModel) { { url, title -> viewModel.addLocalBookmark(url, title) } },
+                        onDeleteLocalBookmark = remember(viewModel) { { url -> viewModel.removeLocalBookmark(url) } },
                         searchHistory = finalSearchHistory,
-                        onAddSearchHistory = { query -> viewModel.addSearchHistory(query) },
-                        onDeleteSearchHistory = { id -> viewModel.removeSearchHistory(id) },
-                        onClearSearchHistory = { viewModel.clearSearchHistory() },
-                        onDeleteBookmark = { url -> viewModel.removeBookmark(url) },
-                        onNavigate = { url ->
-                            viewModel.navigateTo(url)
-                        },
-                        textZoom = textZoom,
-                        onSetTextZoom = { viewModel.setTextZoom(it) },
-                        isDeepMode = isDeepMode,
-                        onToggleDeepMode = { viewModel.toggleDeepMode() },
-                        onClearHistory = { viewModel.clearHistory() },
-                        onUpdateBookmark = { viewModel.updateBookmark(it) },
-                        isCloudRendering = isCloudRendering,
-                        onToggleCloudRendering = { viewModel.toggleCloudRendering() },
-                        isTextOnly = isTextOnly,
-                        onToggleTextOnly = { viewModel.toggleTextOnly() },
-                        isAggressiveCaching = isAggressiveCaching,
-                        onToggleAggressiveCaching = { viewModel.toggleAggressiveCaching() },
-                        isAdBlockEnabled = isAdBlockEnabled,
-                        onToggleAdBlock = { viewModel.toggleAdBlock() },
-                        isCpuThrottleEnabled = isCpuThrottleEnabled,
-                        onToggleCpuThrottle = { viewModel.toggleCpuThrottle() },
-                        isSmartRamCleanerEnabled = isSmartRamCleanerEnabled,
-                        onToggleSmartRamCleaner = { viewModel.toggleSmartRamCleaner() },
-                        isCircularSafeMode = isCircularSafeMode,
-                        onToggleCircularSafeMode = { viewModel.toggleCircularSafeMode() },
-                        isSerifFont = isSerifFont,
-                        onToggleSerifFont = { viewModel.toggleSerifFont() },
-                        lineHeightMultiplier = lineHeightMultiplier,
-                        onSetLineHeightMultiplier = { viewModel.setLineHeightMultiplier(it) },
-                        isParagraphIndent = isParagraphIndent,
-                        onToggleParagraphIndent = { viewModel.toggleParagraphIndent() },
-                        isJustifyAlign = isJustifyAlign,
-                        onToggleJustifyAlign = { viewModel.toggleJustifyAlign() },
-                        imageCacheSize = imageCacheSize,
-                        voiceCacheSize = voiceCacheSize,
-                        onClearCache = { viewModel.clearVoiceAndImageCache() },
-                        onRefreshCache = { viewModel.refreshCacheSizes() }
+                        onAddSearchHistory = remember(viewModel) { { query -> viewModel.addSearchHistory(query) } },
+                        onDeleteSearchHistory = remember(viewModel) { { id -> viewModel.removeSearchHistory(id) } },
+                        onClearSearchHistory = remember(viewModel) { { viewModel.clearSearchHistory() } },
+                        onDeleteBookmark = remember(viewModel) { { url -> viewModel.removeBookmark(url) } },
+                        onUpdateBookmark = remember(viewModel) { { viewModel.updateBookmark(it) } },
+                        onNavigate = remember(viewModel) { { url -> viewModel.navigateTo(url) } },
+                        onOpenSettings = remember { { showHomeSettingsDialog = true } },
+                        onOpenDownloads = remember { { showHomeDownloadsDialog = true } }
                     )
                 }
+
                 ScreenState.HISTORY -> {
                     HistoryScreen(
                         history = history,
@@ -455,435 +922,35 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                         onBack = { viewModel.navigateTo("pixelbrowser://home") }
                     )
                 }
-                ScreenState.BROWSER -> {
-                    val context = LocalContext.current
-                    val isOffline = remember(currentUrl) {
-                        if (currentUrl != "pixelbrowser://home" && !currentUrl.startsWith("file://") && !currentUrl.startsWith("about:")) {
-                            !isNetworkAvailable(context)
-                        } else {
-                            false
+
+                ScreenState.OFFLINE_PAGES -> {
+                    OfflinePagesScreen(
+                        offlinePages = offlinePages,
+                        isOnline = isOnline,
+                        onOpenPage = { page ->
+                            viewModel.navigateTo("file://${page.localPath}")
+                        },
+                        onOpenInReader = { page ->
+                            viewModel.navigateTo("file://${page.localPath}")
+                        },
+                        onDeletePage = { page ->
+                            viewModel.deleteOfflinePage(page.id, page.localPath)
+                        },
+                        onClearAll = {
+                            viewModel.clearAllOfflinePages()
+                        },
+                        onBack = {
+                            viewModel.navigateTo("pixelbrowser://home")
                         }
-                    }
-
-                    if (isOffline) {
-                        OfflineScreen(
-                            onDismiss = {
-                                viewModel.navigateTo("pixelbrowser://home")
-                            }
-                        )
-                    } else {
-                        var leftDragOffset by remember { mutableStateOf(0f) }
-                        var rightDragOffset by remember { mutableStateOf(0f) }
-                        val dragThresholdPx = with(androidx.compose.ui.platform.LocalDensity.current) { 50.dp.toPx() }
-
-                        val isScreenRound = androidx.compose.ui.platform.LocalConfiguration.current.isScreenRound
-                        val safeTopPadding = if (isScreenRound && isCircularSafeMode) 24.dp else 0.dp
-                        val safeBottomPadding = if (isScreenRound && isCircularSafeMode) 38.dp else 0.dp
-                        val safeSidePadding = if (isScreenRound && isCircularSafeMode) 22.dp else 0.dp
-
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(if (isDeepMode) Color.Black else MaterialTheme.colorScheme.background)
-                                .focusRequester(webViewFocusRequester)
-                                .focusable()
-                                .onRotaryScrollEvent {
-                                    // Support high-precision mechanical crown scrolling for the web page itself!
-                                    webViewRef?.scrollBy(0, (it.verticalScrollPixels * 1.5f).toInt())
-                                    true
-                                }
-                        ) {
-                            if (!showSecurityWarning) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .graphicsLayer {
-                                            translationX = leftDragOffset - rightDragOffset
-                                        }
-                                        .padding(
-                                            top = safeTopPadding,
-                                            bottom = safeBottomPadding,
-                                            start = safeSidePadding,
-                                            end = safeSidePadding
-                                        )
-                                        .then(
-                                            if (isScreenRound && isCircularSafeMode) {
-                                                Modifier
-                                                    .clip(RoundedCornerShape(14.dp))
-                                                    .background(if (isDeepMode) Color.Black else Color.White)
-                                                    .border(
-                                                        width = 1.dp,
-                                                        color = if (isDeepMode) Color.DarkGray.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f),
-                                                        shape = RoundedCornerShape(14.dp)
-                                                    )
-                                            } else {
-                                                Modifier
-                                            }
-                                        )
-                                ) {
-                                    WebViewComponent(
-                                        url = currentUrl,
-                                        isPowerSaving = isPowerSavingMode,
-                                        textZoom = textZoom,
-                                        isCloudRendering = isCloudRendering,
-                                        isTextOnly = isTextOnly,
-                                        isAggressiveCaching = isAggressiveCaching,
-                                        isAdBlockEnabled = isAdBlockEnabled,
-                                        isCpuThrottleEnabled = isCpuThrottleEnabled,
-                                        isPopupBlockingEnabled = isPopupBlockingEnabled,
-                                        isPhishingProtectionEnabled = isPhishingProtectionEnabled,
-                                        isBlockThirdPartyCookiesEnabled = isBlockThirdPartyCookiesEnabled,
-                                        isSerifFont = isSerifFont,
-                                        lineHeightMultiplier = lineHeightMultiplier,
-                                        isParagraphIndent = isParagraphIndent,
-                                        isJustifyAlign = isJustifyAlign,
-                                        bypassedHosts = bypassedHosts,
-                                        onUnsafeSiteDetected = { url, threat ->
-                                            unsafeUrlToLoad = url
-                                            threatTypeDetected = threat
-                                            showSecurityWarning = true
-                                        },
-                                        onAdBlocked = { viewModel.incrementBlockedAdsCount() },
-                                        onPageStarted = {
-                                            isLoading = true
-                                            loadProgress = 0
-                                        },
-                                        onPageFinished = { title, loadedUrl ->
-                                            isLoading = false
-                                            loadProgress = 100
-                                            pageTitle = title ?: ""
-                                            if (loadedUrl != null && loadedUrl != "about:blank") {
-                                                viewModel.updateUrlFromWebView(loadedUrl)
-                                                viewModel.addToHistory(loadedUrl, pageTitle)
-                                            } else {
-                                                viewModel.addToHistory(currentUrl, pageTitle)
-                                            }
-                                            canGoBack = webViewRef?.canGoBack() == true
-                                            canGoForward = webViewRef?.canGoForward() == true
-                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                        },
-                                        onProgressChanged = { progress ->
-                                            loadProgress = progress
-                                            if (progress >= 100) {
-                                                isLoading = false
-                                            } else {
-                                                isLoading = true
-                                            }
-                                        },
-                                        onWebViewCreated = { webViewRef = it },
-                                        onDownloadRequested = { downloadUrl, contentDisposition, mimeType ->
-                                            viewModel.downloadFile(downloadUrl, contentDisposition, mimeType)
-                                        }
-                                    )
-                                }
-
-                                // Overlay Controls
-                                Column(
-                                    modifier = Modifier
-                                        .align(Alignment.BottomCenter)
-                                        .padding(bottom = if (isScreenRound) (if (isCircularSafeMode) 6.dp else 18.dp) else 10.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    val menuInt = remember { MutableInteractionSource() }
-                                    val downloadInt = remember { MutableInteractionSource() }
-
-                                    Box(
-                                        modifier = Modifier
-                                            .background(
-                                                color = if (isDeepMode) Color.Black.copy(alpha = 0.85f) else MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.85f),
-                                                shape = RoundedCornerShape(22.dp)
-                                            )
-                                            .border(
-                                                width = 1.dp,
-                                                color = if (isDeepMode) Color.DarkGray.copy(alpha = 0.5f) else MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
-                                                shape = RoundedCornerShape(22.dp)
-                                            )
-                                            .padding(horizontal = 10.dp, vertical = 5.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                                        ) {
-                                            if (currentUrl != "pixelbrowser://home") {
-                                                IconButton(
-                                                    onClick = {
-                                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                        showMenu = true
-                                                    },
-                                                    modifier = Modifier
-                                                        .size(36.dp)
-                                                        .expressiveScale(menuInt),
-                                                    interactionSource = menuInt
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Menu,
-                                                        contentDescription = "Menu",
-                                                        modifier = Modifier.size(18.dp),
-                                                        tint = MaterialTheme.colorScheme.onSurface
-                                                    )
-                                                }
-                                            }
-                                            
-                                            val isBookmarked = bookmarks.any { it.url == currentUrl }
-                                            val bookmarkInt = remember { MutableInteractionSource() }
-                                            IconButton(
-                                                onClick = {
-                                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                    if (isBookmarked) {
-                                                        viewModel.removeBookmark(currentUrl)
-                                                    } else {
-                                                        viewModel.addBookmark(currentUrl, pageTitle)
-                                                    }
-                                                },
-                                                modifier = Modifier
-                                                    .size(36.dp)
-                                                    .expressiveScale(bookmarkInt),
-                                                interactionSource = bookmarkInt
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Filled.Bookmark,
-                                                    contentDescription = "Bookmark",
-                                                    modifier = Modifier.size(18.dp),
-                                                    tint = if (isBookmarked) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                                )
-                                            }
-
-                                            IconButton(
-                                                onClick = {
-                                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                                    viewModel.downloadFile(currentUrl)
-                                                },
-                                                modifier = Modifier
-                                                    .size(36.dp)
-                                                    .expressiveScale(downloadInt),
-                                                interactionSource = downloadInt
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Download,
-                                                    contentDescription = "Download",
-                                                    modifier = Modifier.size(18.dp),
-                                                    tint = MaterialTheme.colorScheme.onSurface
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                
-                                DeferredLoadingProgress(
-                                    isLoadingProvider = { isLoading },
-                                    progressProvider = { loadProgress }
-                                )
-                            } else {
-                                val currentThreat = threatTypeDetected ?: ThreatType.PHISHING
-                                val title = if (currentThreat == ThreatType.PHISHING) "偵測到疑似釣魚網站！" else "偵測到惡意網站與威脅！"
-                                val desc = if (currentThreat == ThreatType.PHISHING) {
-                                    "此網頁可能偽裝成其他合法網站，旨在騙取您的個人資訊或敏感密碼。"
-                                } else {
-                                    "此網站可能含有惡意軟體、木馬程式，造訪它可能會損害您的裝置。"
-                                }
-                                
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .background(Color(0xFF8B0000))
-                                        .padding(16.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    ScalingLazyColumn(
-                                        modifier = Modifier.fillMaxSize(),
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                                    ) {
-                                        item {
-                                            Icon(
-                                                imageVector = Icons.Default.Warning,
-                                                contentDescription = "警示",
-                                                tint = Color.White,
-                                                modifier = Modifier.size(36.dp)
-                                            )
-                                        }
-                                        item {
-                                            Text(
-                                                text = title,
-                                                color = Color.White,
-                                                style = MaterialTheme.typography.titleMedium,
-                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                            )
-                                        }
-                                        item {
-                                            Text(
-                                                text = "網址: $unsafeUrlToLoad",
-                                                color = Color.White.copy(alpha = 0.7f),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                            )
-                                        }
-                                        item {
-                                            Text(
-                                                text = desc,
-                                                color = Color.White.copy(alpha = 0.9f),
-                                                style = MaterialTheme.typography.bodySmall,
-                                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
-                                            )
-                                        }
-                                        item {
-                                            Spacer(modifier = Modifier.height(8.dp))
-                                        }
-                                        item {
-                                            Button(
-                                                onClick = {
-                                                    showSecurityWarning = false
-                                                    viewModel.navigateTo("pixelbrowser://home")
-                                                },
-                                                colors = ButtonDefaults.buttonColors(
-                                                    containerColor = Color.White,
-                                                    contentColor = Color(0xFF8B0000)
-                                                ),
-                                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-                                            ) {
-                                                Text("返回安全主頁", style = MaterialTheme.typography.labelMedium)
-                                            }
-                                        }
-                                        item {
-                                            TextButton(
-                                                onClick = {
-                                                    val host = android.net.Uri.parse(unsafeUrlToLoad).host?.lowercase() ?: ""
-                                                    if (host.isNotEmpty()) {
-                                                        bypassedHosts = bypassedHosts + host
-                                                    }
-                                                    showSecurityWarning = false
-                                                    webViewRef?.loadUrl(unsafeUrlToLoad)
-                                                }
-                                            ) {
-                                                Text("仍要造訪 (不安全)", color = Color.White.copy(alpha = 0.8f), style = MaterialTheme.typography.bodySmall)
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-
-                            // Left Edge (Swipe Right to Go Back / Go Home)
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.CenterStart)
-                                    .fillMaxHeight()
-                                    .width(28.dp)
-                                    .pointerInput(currentUrl, canGoBack) {
-                                        if (currentUrl == "pixelbrowser://home") return@pointerInput
-                                        detectHorizontalDragGestures(
-                                            onDragStart = { leftDragOffset = 0f },
-                                            onDragEnd = {
-                                                if (leftDragOffset > dragThresholdPx) {
-                                                    if (canGoBack) {
-                                                        webViewRef?.goBack()
-                                                    } else {
-                                                        viewModel.navigateTo("pixelbrowser://home")
-                                                    }
-                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                }
-                                                leftDragOffset = 0f
-                                            },
-                                            onDragCancel = { leftDragOffset = 0f },
-                                            onHorizontalDrag = { _, dragAmount ->
-                                                leftDragOffset = (leftDragOffset + dragAmount).coerceAtLeast(0f)
-                                            }
-                                        )
-                                    }
-                            )
-
-                            // Right Edge (Swipe Left to Go Forward)
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.CenterEnd)
-                                    .fillMaxHeight()
-                                    .width(28.dp)
-                                    .pointerInput(canGoForward) {
-                                        if (!canGoForward) return@pointerInput
-                                        detectHorizontalDragGestures(
-                                            onDragStart = { rightDragOffset = 0f },
-                                            onDragEnd = {
-                                                if (rightDragOffset < -dragThresholdPx) {
-                                                    webViewRef?.goForward()
-                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                }
-                                                rightDragOffset = 0f
-                                            },
-                                            onDragCancel = { rightDragOffset = 0f },
-                                            onHorizontalDrag = { _, dragAmount ->
-                                                rightDragOffset = (rightDragOffset + dragAmount).coerceAtMost(0f)
-                                            }
-                                        )
-                                    }
-                            )
-
-                            // Visual back gesture indicator
-                            if (leftDragOffset > 0f) {
-                                val progress = (leftDragOffset / dragThresholdPx).coerceIn(0f, 1.2f)
-                                val isTriggered = leftDragOffset >= dragThresholdPx
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.CenterStart)
-                                        .graphicsLayer {
-                                            translationX = (-40.dp.toPx() + (leftDragOffset * 0.6f)).coerceAtMost(16.dp.toPx())
-                                            alpha = progress.coerceIn(0f, 1f)
-                                            scaleX = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
-                                            scaleY = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
-                                        }
-                                        .background(
-                                            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f),
-                                            shape = androidx.compose.foundation.shape.CircleShape
-                                        )
-                                        .size(40.dp)
-                                        .padding(8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                        contentDescription = "返回",
-                                        tint = if (isTriggered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                            }
-
-                            // Visual forward gesture indicator
-                            if (rightDragOffset < 0f) {
-                                val rightDragAbs = -rightDragOffset
-                                val progress = (rightDragAbs / dragThresholdPx).coerceIn(0f, 1.2f)
-                                val isTriggered = rightDragAbs >= dragThresholdPx
-                                Box(
-                                    modifier = Modifier
-                                        .align(Alignment.CenterEnd)
-                                        .graphicsLayer {
-                                            translationX = (40.dp.toPx() + (rightDragOffset * 0.6f)).coerceAtLeast(-16.dp.toPx())
-                                            alpha = progress.coerceIn(0f, 1f)
-                                            scaleX = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
-                                            scaleY = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
-                                        }
-                                        .background(
-                                            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f),
-                                            shape = androidx.compose.foundation.shape.CircleShape
-                                        )
-                                        .size(40.dp)
-                                        .padding(8.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                                        contentDescription = "前進",
-                                        tint = if (isTriggered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                            }
-
-                        }
-                    }
+                    )
                 }
+                else -> {}
             }
         }
-
-        // Swipe up from the very bottom of the screen to open the full-screen menu
+    }
+} // close Box for contentRef
+            
+            // Swipe up from the very bottom of the screen to open the full-screen menu
             val bottomDensity = androidx.compose.ui.platform.LocalDensity.current
             val bottomThresholdPx = with(bottomDensity) { 45.dp.toPx() }
             val bottomAnim = remember { Animatable(0f) }
@@ -976,8 +1043,8 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                 }
             }
 
-            if (screenState == ScreenState.HOME || screenState == ScreenState.HISTORY) {
-                val activePage = if (screenState == ScreenState.HOME) 0 else 1
+            if (screenState == ScreenState.HISTORY) {
+                val activePage = 1
                 PageIndicator(
                     activePage = activePage,
                     pageCount = 2,
@@ -997,8 +1064,44 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                         }
                 )
             }
-        }
 
+            // Wear OS One-Handed Gesture HUD Notification overlay
+            AnimatedVisibility(
+                visible = gestureHudMessage != null,
+                enter = fadeIn(animationSpec = tween(150)) + slideInVertically(animationSpec = tween(150)) { -it },
+                exit = fadeOut(animationSpec = tween(200)) + slideOutVertically(animationSpec = tween(200)) { -it },
+                modifier = Modifier
+                    .constrainAs(gestureHudRef) {
+                        top.linkTo(parent.top, margin = 12.dp)
+                        start.linkTo(parent.start)
+                        end.linkTo(parent.end)
+                    }
+                    .padding(horizontal = 16.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.95f),
+                            shape = RoundedCornerShape(20.dp)
+                        )
+                        .border(
+                            width = 1.dp,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                            shape = RoundedCornerShape(20.dp)
+                        )
+                        .padding(horizontal = 14.dp, vertical = 6.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = gestureHudMessage ?: "",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        textAlign = TextAlign.Center
+                    )
+                }
+            }
+        }
 
         SearchDialog(
             show = showSearchDialog,
@@ -1016,6 +1119,58 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
             onDismiss = { showQrDialog = false },
             currentUrl = currentUrl
         )
+
+        if (showHomeSettingsDialog) {
+            SettingsDialog(
+                show = true,
+                onDismiss = { showHomeSettingsDialog = false },
+                textZoom = textZoom,
+                onSetTextZoom = { viewModel.setTextZoom(it) },
+                isDeepMode = isDeepMode,
+                onToggleDeepMode = { viewModel.toggleDeepMode() },
+                isAdBlockEnabled = isAdBlockEnabled,
+                onToggleAdBlock = { viewModel.toggleAdBlock() },
+                isTextOnly = isTextOnly,
+                onToggleTextOnly = { viewModel.toggleTextOnly() },
+                isCircularSafeMode = isCircularSafeMode,
+                onToggleCircularSafeMode = { viewModel.toggleCircularSafeMode() },
+                isSerifFont = isSerifFont,
+                onToggleSerifFont = { viewModel.toggleSerifFont() },
+                lineHeightMultiplier = lineHeightMultiplier,
+                onSetLineHeightMultiplier = { viewModel.setLineHeightMultiplier(it) },
+                isParagraphIndent = isParagraphIndent,
+                onToggleParagraphIndent = { viewModel.toggleParagraphIndent() },
+                isJustifyAlign = isJustifyAlign,
+                onToggleJustifyAlign = { viewModel.toggleJustifyAlign() },
+                onClearHistory = { viewModel.clearHistory() },
+                imageCacheSize = imageCacheSize,
+                voiceCacheSize = voiceCacheSize,
+                onClearCache = { viewModel.clearVoiceAndImageCache() },
+                onRefreshCache = { viewModel.refreshCacheSizes() },
+                isOneHandedGesturesEnabled = isOneHandedGesturesEnabled,
+                onToggleOneHandedGestures = { viewModel.toggleOneHandedGestures() },
+                gestureSensitivity = gestureSensitivity,
+                onSetGestureSensitivity = { viewModel.setGestureSensitivity(it) }
+            )
+        }
+
+        if (showHomeDownloadsDialog) {
+            DownloadsDialog(
+                show = true,
+                onDismiss = { showHomeDownloadsDialog = false },
+                downloadedFiles = downloadedFiles,
+                activeDownloads = activeDownloads,
+                onNavigate = { viewModel.navigateTo(it) },
+                onDeleteDownloadedFile = { id, path -> viewModel.deleteDownloadedFile(id, path) },
+                onPauseDownload = { taskId -> viewModel.pauseDownload(taskId) },
+                onResumeDownload = { taskId -> viewModel.resumeDownload(taskId) },
+                onCancelDownload = { taskId -> viewModel.cancelDownload(taskId) },
+                onInitiateDownload = { url, name -> viewModel.downloadFile(url = url, customFileName = name) },
+                onClearCompletedDownloads = { viewModel.clearCompletedDownloads() },
+                onClearAllDownloadedFiles = { viewModel.clearAllDownloadedFiles() },
+                getStorageUsageInfo = { viewModel.getStorageUsageInfo() }
+            )
+        }
     }
 }
 
@@ -1059,19 +1214,22 @@ fun WebViewComponent(
     onProgressChanged: (Int) -> Unit,
     onWebViewCreated: (WebView) -> Unit,
     onDownloadRequested: (String, String?, String?) -> Unit,
-    onAdBlocked: () -> Unit = {}
+    onAdBlocked: () -> Unit = {},
+    onWebViewFailed: () -> Unit = {}
 ) {
-    var lastLoadedUrl by remember { mutableStateOf("") }
+    val lastLoadedUrl = remember { arrayOf("") }
 
     AndroidView(
         factory = { context ->
-            WebView(context).apply {
-                onWebViewCreated(this)
-                
-                // Allow cookies and block third-party cookies if configured
-                try {
-                    val cookieManager = android.webkit.CookieManager.getInstance()
-                    cookieManager.setAcceptCookie(true)
+            val container = android.widget.FrameLayout(context)
+            try {
+                val webView = WebView(context).apply {
+                    onWebViewCreated(this)
+                    
+                    // Allow cookies and block third-party cookies if configured
+                    try {
+                        val cookieManager = android.webkit.CookieManager.getInstance()
+                        cookieManager.setAcceptCookie(true)
                     cookieManager.setAcceptThirdPartyCookies(this, !isBlockThirdPartyCookiesEnabled)
                 } catch (e: Exception) {
                     e.printStackTrace()
@@ -1119,21 +1277,63 @@ fun WebViewComponent(
                                         }
                                         body { 
                                             background-color: black !important; 
-                                            color: #e0e0e0 !important; 
-                                            font-family: $fontStyleValue !important; 
+                                            color: #e5e7eb !important; 
+                                            font-family: $fontStyleValue, system-ui, -apple-system, sans-serif !important; 
                                             line-height: $lineHeightMultiplier !important; 
                                             text-align: $textAlignValue !important;
-                                            padding: 8px !important;
+                                            text-justify: inter-ideograph !important;
+                                            padding: 14% 10% 28% 10% !important; /* Circular WearOS screen optimized safe zone */
+                                            font-size: ${textZoom}% !important;
+                                            letter-spacing: 0.05em !important;
+                                            word-break: break-word !important;
+                                            text-rendering: optimizeLegibility !important;
+                                            -webkit-font-smoothing: antialiased !important;
                                         }
                                         p {
                                             $pStyle
-                                            margin-bottom: 12px !important;
+                                            margin-top: 0 !important;
+                                            margin-bottom: 1.5em !important;
+                                            text-align: $textAlignValue !important;
                                         }
                                         h1, h2, h3, h4, h5, h6 { 
-                                            color: #00ffcc !important; 
+                                            color: #30f2c0 !important; /* Premium neon teal header */
+                                            font-weight: bold !important;
                                             cursor: pointer !important;
-                                            border-bottom: 1px solid #333 !important;
-                                            padding-bottom: 4px !important;
+                                            border-left: 3px solid #30f2c0 !important;
+                                            border-bottom: 1px dashed rgba(255, 255, 255, 0.15) !important;
+                                            padding-left: 8px !important;
+                                            padding-bottom: 6px !important;
+                                            margin-top: 1.8em !important;
+                                            margin-bottom: 0.8em !important;
+                                            line-height: 1.3 !important;
+                                        }
+                                        a {
+                                            color: #81d4fa !important;
+                                            text-decoration: underline !important;
+                                            cursor: pointer !important;
+                                        }
+                                        blockquote {
+                                            border-left: 3px solid #ffb74d !important;
+                                            padding-left: 10px !important;
+                                            margin: 1.2em 0 !important;
+                                            color: #ffb74d !important;
+                                            font-style: italic !important;
+                                        }
+                                        pre, code {
+                                            background-color: #1a1a1a !important;
+                                            color: #ffd54f !important;
+                                            font-family: monospace !important;
+                                            padding: 2px 4px !important;
+                                            border-radius: 4px !important;
+                                            font-size: 0.9em !important;
+                                            word-break: break-all !important;
+                                        }
+                                        ul, ol {
+                                            padding-left: 1.2em !important;
+                                            margin-bottom: 1.2em !important;
+                                        }
+                                        li {
+                                            margin-bottom: 0.6em !important;
                                         }
                                     `;
                                     document.head.appendChild(style);
@@ -1181,9 +1381,14 @@ fun WebViewComponent(
                                             width: auto !important; 
                                             max-width: 100% !important; 
                                             margin: 0 !important; 
-                                            padding: 4px !important; 
+                                            padding: 12% 10% 24% 10% !important; /* Circular WearOS screen optimized safe zone */
                                             background: black !important;
-                                            color: white !important;
+                                            color: #e5e7eb !important;
+                                            font-family: system-ui, -apple-system, sans-serif !important;
+                                            line-height: 1.5 !important;
+                                            letter-spacing: 0.04em !important;
+                                            font-size: ${textZoom}% !important;
+                                            word-break: break-word !important;
                                         }
                                     `;
                                     document.head.appendChild(style);
@@ -1451,15 +1656,29 @@ fun WebViewComponent(
                         e.printStackTrace()
                     }
                 }
+                }
+                container.addView(webView)
+            } catch (e: Throwable) {
+                val errorView = android.widget.TextView(context).apply {
+                    text = "無法載入瀏覽器引擎。請確定您的手錶已安裝並啟用「Android System WebView」。\n\n錯誤: ${e.message}"
+                    setTextColor(android.graphics.Color.WHITE)
+                    gravity = android.view.Gravity.CENTER
+                    setPadding(32, 32, 32, 32)
+                }
+                container.addView(errorView)
+                onWebViewFailed()
             }
+            container
         },
-        update = { webView ->
+        update = { container ->
+            val webView = container.getChildAt(0) as? WebView ?: return@AndroidView
+            
             val webViewUrl = webView.url
             val areSame = areUrlsSame(webViewUrl, url)
             
             if (url != "pixelbrowser://home" && !url.startsWith("pixelbrowser://")) {
-                if (!areSame && url != lastLoadedUrl) {
-                    lastLoadedUrl = url
+                if (!areSame && url != lastLoadedUrl[0]) {
+                    lastLoadedUrl[0] = url
                     webView.loadUrl(url)
                 }
             }
@@ -1493,11 +1712,12 @@ fun WebViewComponent(
                 }
             }
         },
-        onRelease = { webView ->
-            webView.stopLoading()
-            webView.clearHistory()
-            webView.removeAllViews()
-            webView.destroy()
+        onRelease = { container ->
+            val webView = container.getChildAt(0) as? WebView
+            webView?.stopLoading()
+            webView?.clearHistory()
+            webView?.removeAllViews()
+            webView?.destroy()
         },
         modifier = Modifier.fillMaxSize()
     )
@@ -1566,7 +1786,10 @@ fun Modifier.expressiveScale(interactionSource: MutableInteractionSource): Modif
         ),
         label = "ExpressiveScale"
     )
-    return this.scale(scale)
+    return this.graphicsLayer {
+        scaleX = scale
+        scaleY = scale
+    }
 }
 
 @Composable
@@ -1592,7 +1815,10 @@ fun PulsingRingButton(
     )
     val hapticEffect = LocalHapticFeedback.current
     val scaleModifier = if (interactionSource != null) {
-        Modifier.scale(scale)
+        Modifier.graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
     } else {
         Modifier
     }
@@ -1683,7 +1909,12 @@ fun ExpressiveDialog(
     onDismissRequest: () -> Unit,
     content: @Composable () -> Unit
 ) {
-    Dialog(onDismissRequest = onDismissRequest) {
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false
+        )
+    ) {
         var animateIn by remember { mutableStateOf(false) }
         LaunchedEffect(Unit) {
             animateIn = true
@@ -1704,9 +1935,13 @@ fun ExpressiveDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
                 .statusBarsPadding()
-                .scale(scale)
-                .alpha(dialogAlpha),
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    alpha = dialogAlpha
+                },
             contentAlignment = Alignment.Center
         ) {
             content()
@@ -1718,6 +1953,7 @@ fun ExpressiveDialog(
 @Composable
 fun BookmarkMenu(
     bookmarks: List<com.example.data.Bookmark>,
+    offlinePages: List<com.example.data.OfflinePage> = emptyList(),
     downloadedFiles: List<com.example.data.DownloadedFile>,
     history: List<com.example.data.HistoryEntry>,
     searchHistory: List<com.example.data.SearchHistory>,
@@ -1727,6 +1963,7 @@ fun BookmarkMenu(
     currentUrl: String,
     pageTitle: String,
     onAddBookmark: (String, String) -> Unit,
+    onSaveOfflinePage: () -> Unit = {},
     textZoom: Int,
     onSetTextZoom: (Int) -> Unit,
     isSpeaking: Boolean,
@@ -1827,6 +2064,7 @@ fun BookmarkMenu(
         scrollState = listState,
         bottomButton = {
             EdgeButton(
+                modifier = Modifier.height(60.dp),
                 onClick = {
                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     onClose()
@@ -1896,6 +2134,101 @@ fun BookmarkMenu(
                     }
                 }
 
+                // 儲存離線網頁
+                if (currentUrl.startsWith("http://") || currentUrl.startsWith("https://")) {
+                    item {
+                        val isOfflineSaved = offlinePages.any { it.url == currentUrl }
+                        val offlineSaveInteraction = remember { MutableInteractionSource() }
+                        Card(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onSaveOfflinePage()
+                                onClose()
+                            },
+                            colors = CardDefaults.cardColors(
+                                containerColor = if (isOfflineSaved) Color(0xFF1B5E20) else MaterialTheme.colorScheme.secondaryContainer
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp)
+                                .expressiveScale(offlineSaveInteraction),
+                            interactionSource = offlineSaveInteraction
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = if (isOfflineSaved) Icons.Default.CheckCircle else Icons.Default.CloudDownload,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(20.dp),
+                                    tint = if (isOfflineSaved) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                                Column {
+                                    Text(
+                                        if (isOfflineSaved) "重新下載離線網頁" else "下載網頁供離線閱讀",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (isOfflineSaved) Color.White else MaterialTheme.colorScheme.onSecondaryContainer
+                                    )
+                                    Text(
+                                        "完整儲存 HTML 與本文供無網時檢視",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontSize = 10.sp,
+                                        color = if (isOfflineSaved) Color(0xFFC8E6C9) else MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.8f)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 離線網頁庫入口
+                item {
+                    val offlineLibInteraction = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onNavigate("pixelbrowser://offline")
+                            onClose()
+                        },
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .expressiveScale(offlineLibInteraction),
+                        interactionSource = offlineLibInteraction
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.DownloadDone,
+                                contentDescription = null,
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Column {
+                                Text(
+                                    "離線網頁庫",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    "${offlinePages.size} 篇已下載網頁",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+                    }
+                }
+
                 item {
                     val homeInteraction = remember { MutableInteractionSource() }
                     Card(
@@ -1957,6 +2290,37 @@ fun BookmarkMenu(
                                 tint = MaterialTheme.colorScheme.onTertiaryContainer
                             )
                             Text("分享至手機", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                        }
+                    }
+                }
+
+                item {
+                    val geckoInt = remember { MutableInteractionSource() }
+                    Card(
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            val intent = android.content.Intent(context, com.example.GeckoBrowserActivity::class.java)
+                            context.startActivity(intent)
+                        },
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp)
+                            .expressiveScale(geckoInt),
+                        interactionSource = geckoInt
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "GeckoView 下拉重新整理",
+                                modifier = Modifier.size(20.dp),
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                            Text("GeckoView (含下拉重新整理)", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                     }
                 }
@@ -2708,60 +3072,39 @@ fun BookmarkMenu(
 fun HomeScreen(
     bookmarks: List<com.example.data.Bookmark>,
     localBookmarks: List<com.example.data.LocalBookmark>,
+    offlinePages: List<com.example.data.OfflinePage> = emptyList(),
+    isOnline: Boolean = true,
     onAddLocalBookmark: (String, String) -> Unit,
     onDeleteLocalBookmark: (String) -> Unit,
-    downloadedFiles: List<com.example.data.DownloadedFile>,
-    onDeleteDownloadedFile: (Long, String) -> Unit,
-    history: List<com.example.data.HistoryEntry>,
     searchHistory: List<com.example.data.SearchHistory>,
     onAddSearchHistory: (String) -> Unit,
     onDeleteSearchHistory: (Long) -> Unit,
     onClearSearchHistory: () -> Unit,
     onDeleteBookmark: (String) -> Unit,
-    onNavigate: (String) -> Unit,
-    textZoom: Int,
-    onSetTextZoom: (Int) -> Unit,
-    isDeepMode: Boolean,
-    onToggleDeepMode: () -> Unit,
-    onClearHistory: () -> Unit,
     onUpdateBookmark: (com.example.data.Bookmark) -> Unit,
-    isCloudRendering: Boolean,
-    onToggleCloudRendering: () -> Unit,
-    isTextOnly: Boolean,
-    onToggleTextOnly: () -> Unit,
-    isAggressiveCaching: Boolean,
-    onToggleAggressiveCaching: () -> Unit,
-    isAdBlockEnabled: Boolean,
-    onToggleAdBlock: () -> Unit,
-    isCpuThrottleEnabled: Boolean,
-    onToggleCpuThrottle: () -> Unit,
-    isSmartRamCleanerEnabled: Boolean,
-    onToggleSmartRamCleaner: () -> Unit,
-    isCircularSafeMode: Boolean,
-    onToggleCircularSafeMode: () -> Unit,
-    isSerifFont: Boolean,
-    onToggleSerifFont: () -> Unit,
-    lineHeightMultiplier: Float,
-    onSetLineHeightMultiplier: (Float) -> Unit,
-    isParagraphIndent: Boolean,
-    onToggleParagraphIndent: () -> Unit,
-    isJustifyAlign: Boolean,
-    onToggleJustifyAlign: () -> Unit,
-    imageCacheSize: String,
-    voiceCacheSize: String,
-    onClearCache: () -> Unit,
-    onRefreshCache: () -> Unit
+    onNavigate: (String) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenDownloads: () -> Unit
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
     val listState = rememberScalingLazyListState()
     val focusRequester = remember { FocusRequester() }
-    val coroutineScope = rememberCoroutineScope()
 
-    var showSearchMethodDialog by remember { mutableStateOf(false) }
     var showSearchDialog by remember { mutableStateOf(false) }
-    var showSettingsDialog by remember { mutableStateOf(false) }
-    var showDownloadsDialog by remember { mutableStateOf(false) }
+
+    // 檢查剪貼簿是否有複製網址（非同步延遲載入，避免阻塞首頁首幀渲染）
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+    var clipboardText by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(120)
+        try {
+            val clip = clipboardManager.getText()?.text?.trim()
+            if (!clip.isNullOrBlank() && (clip.startsWith("http://") || clip.startsWith("https://") || (clip.contains(".") && !clip.contains(" ") && clip.length > 3))) {
+                clipboardText = clip
+            }
+        } catch (_: Exception) {}
+    }
 
     val voiceLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
         androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
@@ -2797,8 +3140,6 @@ fun HomeScreen(
     var showAddLocalBookmarkDialog by remember { mutableStateOf(false) }
     var bookmarkToEdit by remember { mutableStateOf<com.example.data.Bookmark?>(null) }
     var bookmarkToDelete by remember { mutableStateOf<com.example.data.Bookmark?>(null) }
-    var swipeOffset by remember { mutableStateOf(0f) }
-    val dragThresholdPx = with(androidx.compose.ui.platform.LocalDensity.current) { 50.dp.toPx() }
 
     LaunchedEffect(Unit) {
         try {
@@ -2808,33 +3149,39 @@ fun HomeScreen(
         }
     }
 
+    // 常用網站快速啟動資料列表 (固定常數 remember，避免重複分配)
+    val quickShortcuts = remember {
+        listOf(
+            Triple("Google", "https://www.google.com", Icons.Default.Search),
+            Triple("YouTube", "https://m.youtube.com", Icons.Default.PlayArrow),
+            Triple("維基百科", "https://zh.m.wikipedia.org", Icons.Default.MenuBook),
+            Triple("新聞", "https://news.google.com", Icons.Default.Public)
+        )
+    }
+
+    val scalingParams = remember {
+        ScalingLazyColumnDefaults.scalingParams(
+            edgeScale = 0.85f,
+            edgeAlpha = 0.7f,
+            minTransitionArea = 0.2f,
+            maxTransitionArea = 0.8f
+        )
+    }
+    val flingBehavior = ScalingLazyColumnDefaults.snapFlingBehavior(state = listState)
+
+    val isScreenRound = androidx.compose.ui.platform.LocalConfiguration.current.isScreenRound
+
     Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                detectHorizontalDragGestures(
-                    onDragStart = { swipeOffset = 0f },
-                    onDragEnd = {
-                        if (swipeOffset < -dragThresholdPx) {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                            onNavigate("pixelbrowser://history")
-                        }
-                        swipeOffset = 0f
-                    },
-                    onDragCancel = { swipeOffset = 0f },
-                    onHorizontalDrag = { _, dragAmount ->
-                        swipeOffset = (swipeOffset + dragAmount).coerceAtMost(0f)
-                    }
-                )
-            }
+        modifier = Modifier.fillMaxSize()
     ) {
         ScreenScaffold(
             scrollState = listState,
             bottomButton = {
                 EdgeButton(
+                    modifier = Modifier.height(60.dp),
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                        showSettingsDialog = true
+                        onOpenSettings()
                     }
                 ) {
                     Icon(Icons.Default.Settings, contentDescription = "設定", modifier = Modifier.size(24.dp))
@@ -2844,79 +3191,176 @@ fun HomeScreen(
         ) {
             ScalingLazyColumn(
                 state = listState,
-                contentPadding = PaddingValues(top = 24.dp, start = 8.dp, end = 8.dp, bottom = 64.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(
+                    top = if (isScreenRound) 36.dp else 24.dp,
+                    start = if (isScreenRound) 14.dp else 8.dp,
+                    end = if (isScreenRound) 14.dp else 8.dp,
+                    bottom = if (isScreenRound) 76.dp else 60.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                scalingParams = scalingParams,
+                flingBehavior = flingBehavior,
                 modifier = Modifier
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.background)
                     .focusRequester(focusRequester)
                     .focusable()
-                    .onRotaryScrollEvent {
-                        listState.dispatchRawDelta(it.verticalScrollPixels)
-                        true
-                    },
+                    .rotaryScrollable(
+                        behavior = RotaryScrollableDefaults.behavior(scrollableState = listState),
+                        focusRequester = focusRequester
+                    ),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                item {
+                item(key = "header") {
                     ListHeader {
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            Icon(Icons.Default.Public, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Text("Pixel Browser", style = MaterialTheme.typography.titleMedium)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Public,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                            Text(
+                                "Pixel Browser",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
                         }
                     }
                 }
 
-                item {
-                    val searchInteraction = remember { MutableInteractionSource() }
-                    
-                    val searchBarBgColor = MaterialTheme.colorScheme.primaryContainer
-                    val searchBarContentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                // 離線模式橫幅通知
+                if (!isOnline) {
+                    item(key = "offline_banner") {
+                        Card(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onNavigate("pixelbrowser://offline")
+                            },
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = Color(0xFFE65100).copy(alpha = 0.9f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 6.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CloudOff,
+                                    contentDescription = null,
+                                    tint = Color.White,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        "目前處於離線狀態",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+                                    Text(
+                                        "點此開啟已下載的 ${offlinePages.size} 篇離線網頁",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontSize = 10.sp,
+                                        color = Color.White.copy(alpha = 0.9f)
+                                    )
+                                }
+                                Icon(
+                                    imageVector = Icons.Default.ChevronRight,
+                                    contentDescription = null,
+                                    tint = Color.White.copy(alpha = 0.8f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
 
+                // 搜尋主卡片
+                item(key = "search_card") {
                     Card(
                         onClick = {
                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            showSearchMethodDialog = true
+                            showSearchDialog = true
                         },
-                        colors = CardDefaults.cardColors(containerColor = searchBarBgColor),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        ),
+                        border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 18.dp)
-                            .height(40.dp)
-                            .expressiveScale(searchInteraction),
-                        contentPadding = PaddingValues(0.dp),
-                        interactionSource = searchInteraction
+                            .padding(horizontal = 6.dp)
+                            .height(52.dp)
                     ) {
                         Row(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .fillMaxHeight()
-                                .padding(horizontal = 12.dp),
+                                .fillMaxSize()
+                                .padding(horizontal = 10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            Icon(
-                                Icons.Default.Search,
-                                contentDescription = "搜尋圖標",
-                                modifier = Modifier.size(20.dp),
-                                tint = searchBarContentColor
-                            )
-                            Text(
-                                "搜尋或輸入網址",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = searchBarContentColor,
-                                modifier = Modifier.weight(1f)
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        shape = CircleShape
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = "搜尋",
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            }
+
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Text(
+                                    "搜尋或輸入網址",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    "Google • 語音 • 書籤",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                                    fontSize = 10.sp
+                                )
+                            }
+
                             IconButton(
                                 onClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    showSearchMethodDialog = true
+                                    startVoiceSearch()
                                 },
-                                modifier = Modifier.size(24.dp)
+                                modifier = Modifier
+                                    .size(34.dp)
+                                    .background(
+                                        color = MaterialTheme.colorScheme.secondaryContainer,
+                                        shape = CircleShape
+                                    )
                             ) {
                                 Icon(
                                     Icons.Default.Mic,
                                     contentDescription = "語音搜尋",
-                                    tint = searchBarContentColor,
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
                                     modifier = Modifier.size(18.dp)
                                 )
                             }
@@ -2924,54 +3368,233 @@ fun HomeScreen(
                     }
                 }
 
-                item {
-                    val downloadsInt = remember { MutableInteractionSource() }
-                    Button(
-                        onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            showDownloadsDialog = true
-                        },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainer
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 8.dp)
-                            .expressiveScale(downloadsInt),
-                        interactionSource = downloadsInt
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                // 剪貼簿快速貼上推薦（若有複製網址）
+                if (clipboardText != null) {
+                    val clip = clipboardText!!
+                    item(key = "clipboard_bar") {
+                        Card(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onNavigate(
+                                    if (clip.startsWith("http://") || clip.startsWith("https://")) {
+                                        clip
+                                    } else {
+                                        "https://$clip"
+                                    }
+                                )
+                            },
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.85f)
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp)
+                                .height(40.dp)
                         ) {
-                            Icon(
-                                Icons.Default.Download,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                "下載",
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.ContentPaste,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "前往剪貼簿: ${clip.take(18)}...",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                    maxLines = 1
+                                )
+                            }
                         }
                     }
                 }
 
+                // 快捷撥號 (Speed Dial Shortcuts)
+                item(key = "speed_dial_grid") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        quickShortcuts.forEach { (name, url, iconVector) ->
+                            Card(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    onNavigate(url)
+                                },
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                                ),
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .height(48.dp)
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxSize(),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.Center
+                                ) {
+                                    Icon(
+                                        imageVector = iconVector,
+                                        contentDescription = name,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.height(2.dp))
+                                    Text(
+                                        text = name,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 快捷功能按鈕組：瀏覽紀錄、下載管理、離線網頁
+                item(key = "quick_actions_row") {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // 瀏覽紀錄
+                        Button(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onNavigate("pixelbrowser://history")
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.History,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "紀錄",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+
+                        // 下載管理
+                        Button(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onOpenDownloads()
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainer
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.Download,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "下載",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+
+                        // 離線網頁
+                        Button(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                onNavigate("pixelbrowser://offline")
+                            },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (offlinePages.isNotEmpty()) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceContainer
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(44.dp)
+                        ) {
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.Center
+                            ) {
+                                Icon(
+                                    Icons.Default.DownloadDone,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp),
+                                    tint = if (offlinePages.isNotEmpty()) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "離線(${offlinePages.size})",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontSize = 10.sp,
+                                    color = if (offlinePages.isNotEmpty()) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // 書籤區域
                 if (localBookmarks.isNotEmpty()) {
-                    item {
+                    item(key = "local_bookmarks_header") {
                         ListHeader {
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Text("書籤", style = MaterialTheme.typography.titleMedium)
                                 Text(
-                                    text = "新增",
+                                    "我的書籤",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Text(
+                                    text = "+ 新增",
                                     style = MaterialTheme.typography.labelMedium,
                                     color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold,
                                     modifier = Modifier
                                         .clickable {
                                             haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -2983,7 +3606,6 @@ fun HomeScreen(
                         }
                     }
                     items(items = localBookmarks, key = { "local_${it.url}" }) { bookmark ->
-                        val cardInt = remember { MutableInteractionSource() }
                         CompactListRow(
                             onClick = { onNavigate(bookmark.url) },
                             onLongClick = {
@@ -2995,35 +3617,38 @@ fun HomeScreen(
                                 onDeleteLocalBookmark(bookmark.url)
                             },
                             title = bookmark.title,
-                            url = bookmark.url,
-                            modifier = Modifier.expressiveScale(cardInt),
-                            interactionSource = cardInt
+                            url = bookmark.url
                         )
                     }
                 } else {
-                    item {
-                        Column(
+                    item(key = "no_bookmarks_placeholder") {
+                        Card(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                showAddLocalBookmarkDialog = true
+                            },
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerLow
+                            ),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 24.dp, vertical = 20.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
-                            Box(
+                            Row(
                                 modifier = Modifier
-                                    .size(72.dp)
-                                    .background(
-                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
-                                        shape = androidx.compose.foundation.shape.CircleShape
-                                    ),
-                                contentAlignment = Alignment.Center
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(54.dp)
+                                        .size(36.dp)
                                         .background(
-                                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.85f),
-                                            shape = androidx.compose.foundation.shape.CircleShape
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            shape = CircleShape
                                         ),
                                     contentAlignment = Alignment.Center
                                 ) {
@@ -3031,60 +3656,36 @@ fun HomeScreen(
                                         imageVector = Icons.Default.BookmarkBorder,
                                         contentDescription = null,
                                         tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                        modifier = Modifier.size(30.dp)
+                                        modifier = Modifier.size(20.dp)
                                     )
                                 }
-                            }
-                            
-                            Text(
-                                text = "收藏你的最愛",
-                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
-                                color = MaterialTheme.colorScheme.onSurface,
-                                textAlign = TextAlign.Center
-                            )
-                            
-                            Text(
-                                text = "將常造訪的網頁儲存至此，即可隨時一鍵快速開啟！",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                                textAlign = TextAlign.Center,
-                                modifier = Modifier.padding(horizontal = 12.dp)
-                            )
-                            
-                            Spacer(modifier = Modifier.height(4.dp))
-                            
-                            Button(
-                                onClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                    showAddLocalBookmarkDialog = true
-                                },
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primary,
-                                    contentColor = MaterialTheme.colorScheme.onPrimary
-                                ),
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(36.dp),
-                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 0.dp)
-                            ) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Default.Add,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "新增常用書籤",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.onSurface
                                     )
-                                    Text("新增第一個書籤", style = MaterialTheme.typography.labelMedium)
+                                    Text(
+                                        text = "一鍵快速造訪喜愛網站",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontSize = 10.sp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
                                 }
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "新增",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
                     }
                 }
 
                 if (bookmarks.isNotEmpty()) {
-                    item {
+                    item(key = "global_bookmarks_header") {
                         ListHeader(
                             modifier = Modifier.clickable {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -3095,7 +3696,7 @@ fun HomeScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
-                                Text("書籤", style = MaterialTheme.typography.titleMedium)
+                                Text("所有書籤", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                                 Icon(
                                     imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                                     contentDescription = "管理書籤",
@@ -3105,8 +3706,7 @@ fun HomeScreen(
                             }
                         }
                     }
-                    items(items = bookmarks.take(3), key = { it.url }) { bookmark ->
-                        val cardInt = remember { MutableInteractionSource() }
+                    items(items = bookmarks.take(3), key = { "global_${it.url}" }) { bookmark ->
                         CompactListRow(
                             onClick = { onNavigate(bookmark.url) },
                             onLongClick = {
@@ -3118,15 +3718,12 @@ fun HomeScreen(
                                 onDeleteBookmark(bookmark.url)
                             },
                             title = bookmark.title,
-                            url = bookmark.url,
-                            modifier = Modifier.expressiveScale(cardInt),
-                            interactionSource = cardInt
+                            url = bookmark.url
                         )
                     }
 
                     if (bookmarks.size > 3) {
-                        item {
-                            val moreInt = remember { MutableInteractionSource() }
+                        item(key = "show_all_bookmarks_btn") {
                             Button(
                                 onClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
@@ -3136,139 +3733,66 @@ fun HomeScreen(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 16.dp, vertical = 4.dp)
-                                    .expressiveScale(moreInt),
-                                interactionSource = moreInt
                             ) {
                                 Text("顯示所有書籤 (${bookmarks.size})", style = MaterialTheme.typography.labelSmall)
                             }
                         }
                     }
                 }
-
-
-            }
-
-            PositionIndicator(
-                scalingLazyListState = listState,
-                modifier = Modifier.align(Alignment.CenterEnd)
-            )
-        }
-
-        // Visual history swipe gesture indicator (Right Side)
-        if (swipeOffset < 0f) {
-            val swipeAbs = -swipeOffset
-            val progress = (swipeAbs / dragThresholdPx).coerceIn(0f, 1.2f)
-            val isTriggered = swipeAbs >= dragThresholdPx
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterEnd)
-                    .graphicsLayer {
-                        translationX = (40.dp.toPx() - (swipeAbs * 0.6f)).coerceAtLeast(-16.dp.toPx())
-                        alpha = progress.coerceIn(0f, 1f)
-                        scaleX = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
-                        scaleY = 0.8f + (progress * 0.2f).coerceAtMost(0.4f)
-                    }
-                    .background(
-                        color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.9f),
-                        shape = androidx.compose.foundation.shape.CircleShape
-                    )
-                    .size(40.dp)
-                    .padding(8.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.History,
-                    contentDescription = "瀏覽紀錄",
-                    tint = if (isTriggered) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                    modifier = Modifier.size(24.dp)
-                )
             }
         }
     }
 
-    SearchMethodDialog(
-        show = showSearchMethodDialog,
-        onDismiss = { showSearchMethodDialog = false },
-        onVoiceSearch = { startVoiceSearch() },
-        onKeyboardSearch = { showSearchDialog = true }
-    )
+    if (showSearchDialog) {
+        SearchDialog(
+            show = true,
+            onDismiss = { showSearchDialog = false },
+            searchQuery = searchQuery,
+            onSearchQueryChange = { searchQuery = it },
+            searchHistory = searchHistory,
+            onAddSearchHistory = onAddSearchHistory,
+            onDeleteSearchHistory = onDeleteSearchHistory,
+            onNavigate = onNavigate
+        )
+    }
 
-    SearchDialog(
-        show = showSearchDialog,
-        onDismiss = { showSearchDialog = false },
-        searchQuery = searchQuery,
-        onSearchQueryChange = { searchQuery = it },
-        searchHistory = searchHistory,
-        onAddSearchHistory = onAddSearchHistory,
-        onDeleteSearchHistory = onDeleteSearchHistory,
-        onNavigate = onNavigate
-    )
+    if (bookmarkToEdit != null) {
+        BookmarkEditDialog(
+            bookmark = bookmarkToEdit,
+            onDismiss = { bookmarkToEdit = null },
+            onUpdateBookmark = onUpdateBookmark
+        )
+    }
 
-    SettingsDialog(
-        show = showSettingsDialog,
-        onDismiss = { showSettingsDialog = false },
-        textZoom = textZoom,
-        onSetTextZoom = onSetTextZoom,
-        isDeepMode = isDeepMode,
-        onToggleDeepMode = onToggleDeepMode,
-        isAdBlockEnabled = isAdBlockEnabled,
-        onToggleAdBlock = onToggleAdBlock,
-        isTextOnly = isTextOnly,
-        onToggleTextOnly = onToggleTextOnly,
-        isCircularSafeMode = isCircularSafeMode,
-        onToggleCircularSafeMode = onToggleCircularSafeMode,
-        isSerifFont = isSerifFont,
-        onToggleSerifFont = onToggleSerifFont,
-        lineHeightMultiplier = lineHeightMultiplier,
-        onSetLineHeightMultiplier = onSetLineHeightMultiplier,
-        isParagraphIndent = isParagraphIndent,
-        onToggleParagraphIndent = onToggleParagraphIndent,
-        isJustifyAlign = isJustifyAlign,
-        onToggleJustifyAlign = onToggleJustifyAlign,
-        onClearHistory = onClearHistory,
-        imageCacheSize = imageCacheSize,
-        voiceCacheSize = voiceCacheSize,
-        onClearCache = onClearCache,
-        onRefreshCache = onRefreshCache
-    )
+    if (bookmarkToDelete != null) {
+        BookmarkDeleteDialog(
+            bookmark = bookmarkToDelete,
+            onDismiss = { bookmarkToDelete = null },
+            onDeleteBookmark = onDeleteBookmark
+        )
+    }
 
-    BookmarkEditDialog(
-        bookmark = bookmarkToEdit,
-        onDismiss = { bookmarkToEdit = null },
-        onUpdateBookmark = onUpdateBookmark
-    )
+    if (showAddLocalBookmarkDialog) {
+        AddLocalBookmarkDialog(
+            show = true,
+            onDismiss = { showAddLocalBookmarkDialog = false },
+            onAdd = { title, url ->
+                onAddLocalBookmark(url, title)
+                showAddLocalBookmarkDialog = false
+            }
+        )
+    }
 
-    BookmarkDeleteDialog(
-        bookmark = bookmarkToDelete,
-        onDismiss = { bookmarkToDelete = null },
-        onDeleteBookmark = onDeleteBookmark
-    )
-
-    AddLocalBookmarkDialog(
-        show = showAddLocalBookmarkDialog,
-        onDismiss = { showAddLocalBookmarkDialog = false },
-        onAdd = { title, url ->
-            onAddLocalBookmark(url, title)
-            showAddLocalBookmarkDialog = false
-        }
-    )
-
-    AllBookmarksDialog(
-        show = showAllBookmarksDialog,
-        onDismiss = { showAllBookmarksDialog = false },
-        bookmarks = bookmarks,
-        onNavigate = onNavigate,
-        onEditBookmark = { bookmarkToEdit = it },
-        onDeleteBookmark = { bookmarkToDelete = it }
-    )
-
-    DownloadsDialog(
-        show = showDownloadsDialog,
-        onDismiss = { showDownloadsDialog = false },
-        downloadedFiles = downloadedFiles,
-        onNavigate = onNavigate,
-        onDeleteDownloadedFile = onDeleteDownloadedFile
-    )
+    if (showAllBookmarksDialog) {
+        AllBookmarksDialog(
+            show = true,
+            onDismiss = { showAllBookmarksDialog = false },
+            bookmarks = bookmarks,
+            onNavigate = onNavigate,
+            onEditBookmark = { bookmarkToEdit = it },
+            onDeleteBookmark = { bookmarkToDelete = it }
+        )
+    }
 }
 
 @Composable
@@ -3375,7 +3899,7 @@ fun HistoryScreen(
                 item {
                     Button(
                         onClick = {
-                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             onClearHistory()
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer),
@@ -3443,7 +3967,8 @@ fun isNetworkAvailable(context: android.content.Context): Boolean {
 
 @Composable
 fun OfflineScreen(
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    onOpenOfflinePages: (() -> Unit)? = null
 ) {
     val haptic = LocalHapticFeedback.current
     Box(
@@ -3455,7 +3980,7 @@ fun OfflineScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 24.dp),
+                .padding(horizontal = 16.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -3463,19 +3988,18 @@ fun OfflineScreen(
                 imageVector = Icons.Default.WifiOff,
                 contentDescription = "No internet connection",
                 tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.size(36.dp)
+                modifier = Modifier.size(32.dp)
             )
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(10.dp))
 
             Text(
-                text = "你的手錶未連上網際網路。請重新連線，然後再試一次。",
+                text = "手錶未連上網際網路",
                 color = Color.White,
                 style = TextStyle(
                     fontFamily = androidx.compose.ui.text.font.FontFamily.SansSerif,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium,
-                    fontSize = 15.sp,
-                    lineHeight = 20.sp
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    fontSize = 15.sp
                 ),
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 modifier = Modifier
@@ -3483,7 +4007,38 @@ fun OfflineScreen(
                     .padding(horizontal = 8.dp)
             )
 
-            Spacer(modifier = Modifier.height(56.dp))
+            Spacer(modifier = Modifier.height(6.dp))
+
+            if (onOpenOfflinePages != null) {
+                Button(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                        onOpenOfflinePages()
+                    },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                    ),
+                    modifier = Modifier
+                        .fillMaxWidth(0.85f)
+                        .height(38.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.DownloadDone,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Text("瀏覽離線網頁", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+
+            Spacer(modifier = Modifier.height(48.dp))
         }
 
         EdgeButton(
@@ -3492,8 +4047,8 @@ fun OfflineScreen(
                 onDismiss()
             },
             colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primaryContainer,
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                contentColor = MaterialTheme.colorScheme.onSecondaryContainer
             ),
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -3504,8 +4059,8 @@ fun OfflineScreen(
             Icon(
                 imageVector = Icons.Default.Close,
                 contentDescription = "Close",
-                tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                modifier = Modifier.size(20.dp)
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(18.dp)
             )
             Spacer(modifier = Modifier.width(4.dp))
             Text("關閉", style = MaterialTheme.typography.labelMedium)
@@ -3539,7 +4094,7 @@ fun CompactListRow(
                     onClick()
                 },
                 onLongClick = {
-                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                     if (onLongClick != null) {
                         onLongClick.invoke()
                     } else if (onDelete != null) {
@@ -3552,38 +4107,35 @@ fun CompactListRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         // Icon
-        var isIconLoaded by remember { mutableStateOf(false) }
         val isWebUrl = url.startsWith("http://") || url.startsWith("https://")
+        val fallbackLetter = remember(title) { title.take(1).uppercase() }
         Box(
             modifier = Modifier
-                .size(40.dp)
+                .size(38.dp)
                 .background(Color.Black.copy(alpha = 0.45f), shape = CircleShape),
             contentAlignment = Alignment.Center
         ) {
+            Text(
+                text = fallbackLetter,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
+                color = MaterialTheme.colorScheme.onSurface
+            )
             if (isWebUrl) {
                 val context = LocalContext.current
                 val imageRequest = remember(url, context) {
                     ImageRequest.Builder(context)
                         .data("https://www.google.com/s2/favicons?sz=64&domain_url=$url")
-                        .crossfade(true)
+                        .memoryCachePolicy(CachePolicy.ENABLED)
+                        .diskCachePolicy(CachePolicy.ENABLED)
+                        .crossfade(false)
                         .build()
                 }
                 AsyncImage(
                     model = imageRequest,
                     contentDescription = "網頁圖標",
-                    onSuccess = { isIconLoaded = true },
-                    onError = { isIconLoaded = false },
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(if (isIconLoaded) 8.dp else 0.dp)
                         .clip(CircleShape)
-                )
-            }
-            if (!isIconLoaded) {
-                Text(
-                    text = title.take(1).uppercase(),
-                    style = MaterialTheme.typography.titleMedium.copy(fontWeight = androidx.compose.ui.text.font.FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
         }
@@ -3630,6 +4182,22 @@ fun SearchDialog(
 
     val coroutineScope = rememberCoroutineScope()
     val haptic = LocalHapticFeedback.current
+    val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
+
+    val executeSearch = {
+        val trimmed = searchQuery.trim()
+        if (trimmed.isNotBlank()) {
+            onAddSearchHistory(trimmed)
+            val dest = if (trimmed.contains(".") && !trimmed.contains(" ")) {
+                if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) trimmed else "https://$trimmed"
+            } else {
+                val encoded = URLEncoder.encode(trimmed, "UTF-8")
+                "https://www.google.com/search?q=$encoded"
+            }
+            onNavigate(dest)
+            onDismiss()
+        }
+    }
 
     ExpressiveDialog(onDismissRequest = onDismiss) {
         val searchListState = rememberScalingLazyListState()
@@ -3647,6 +4215,7 @@ fun SearchDialog(
             scrollState = searchListState,
             bottomButton = {
                 EdgeButton(
+                    modifier = Modifier.height(60.dp),
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onDismiss()
@@ -3680,105 +4249,202 @@ fun SearchDialog(
                         },
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                item {
-                    ListHeader {
-                        Text("搜尋與網址", style = MaterialTheme.typography.titleMedium)
-                    }
-                }
-
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 4.dp, vertical = 2.dp)
-                            .background(
-                                color = MaterialTheme.colorScheme.surfaceContainer,
-                                shape = MaterialTheme.shapes.medium
-                            )
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        BasicTextField(
-                            value = searchQuery,
-                            onValueChange = onSearchQueryChange,
-                            textStyle = TextStyle(
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = MaterialTheme.typography.bodyMedium.fontSize
-                            ),
-                            modifier = Modifier.weight(1f),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                            keyboardActions = KeyboardActions(
-                                onSearch = {
-                                    if (searchQuery.isNotBlank()) {
-                                        onAddSearchHistory(searchQuery)
-                                        val dest = if (searchQuery.contains(".") && !searchQuery.contains(" ")) {
-                                            if (searchQuery.startsWith("http")) searchQuery else "https://$searchQuery"
-                                        } else {
-                                            val encoded = URLEncoder.encode(searchQuery, "UTF-8")
-                                            "https://www.google.com/search?q=$encoded"
-                                        }
-                                        onNavigate(dest)
-                                        onDismiss()
-                                    }
-                                }
-                            )
-                        )
-                    }
-                }
-
-                item {
-                    Button(
-                        onClick = {
-                            if (searchQuery.isNotBlank()) {
-                                onAddSearchHistory(searchQuery)
-                                val dest = if (searchQuery.contains(".") && !searchQuery.contains(" ")) {
-                                    if (searchQuery.startsWith("http")) searchQuery else "https://$searchQuery"
-                                } else {
-                                    val encoded = URLEncoder.encode(searchQuery, "UTF-8")
-                                    "https://www.google.com/search?q=$encoded"
-                                }
-                                onNavigate(dest)
-                                onDismiss()
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
-                    ) {
-                        Text("前往", color = MaterialTheme.colorScheme.onPrimary)
-                    }
-                }
-
-                if (searchHistory.isNotEmpty()) {
-                    item {
+                    item(key = "search_header") {
                         ListHeader {
-                            Text("最近搜尋", style = MaterialTheme.typography.titleSmall)
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text("搜尋與網址列", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
-                    items(items = searchHistory.take(5), key = { it.id }) { entry ->
-                        CompactListRow(
+
+                    item(key = "input_box") {
+                        Card(
+                            onClick = {},
+                            shape = RoundedCornerShape(20.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                            border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 4.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+
+                                Box(modifier = Modifier.weight(1f)) {
+                                    if (searchQuery.isEmpty()) {
+                                        Text(
+                                            "輸入網址或關鍵字...",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    }
+                                    BasicTextField(
+                                        value = searchQuery,
+                                        onValueChange = onSearchQueryChange,
+                                        textStyle = TextStyle(
+                                            color = MaterialTheme.colorScheme.onSurface,
+                                            fontSize = MaterialTheme.typography.bodyMedium.fontSize,
+                                            fontWeight = FontWeight.Medium
+                                        ),
+                                        modifier = Modifier.fillMaxWidth(),
+                                        singleLine = true,
+                                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                        keyboardActions = KeyboardActions(
+                                            onSearch = { executeSearch() }
+                                        )
+                                    )
+                                }
+
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            onSearchQueryChange("")
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Clear,
+                                            contentDescription = "清空文字",
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item(key = "quick_actions") {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 2.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Paste from clipboard button
+                            CompactChip(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    val clipText = clipboardManager.getText()?.text
+                                    if (!clipText.isNullOrBlank()) {
+                                        onSearchQueryChange(clipText)
+                                    }
+                                },
+                                label = { Text("📋 貼上剪貼簿", style = MaterialTheme.typography.labelSmall) },
+                                colors = ChipDefaults.chipColors(
+                                    backgroundColor = MaterialTheme.colorScheme.secondaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                )
+                            )
+
+                            if (searchQuery.isNotEmpty()) {
+                                CompactChip(
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onSearchQueryChange("")
+                                    },
+                                    label = { Text("✕ 清空", style = MaterialTheme.typography.labelSmall) },
+                                    colors = ChipDefaults.chipColors(
+                                        backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                        contentColor = MaterialTheme.colorScheme.onSurface
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    item(key = "go_button") {
+                        Button(
                             onClick = {
-                                onSearchQueryChange(entry.query)
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                executeSearch()
                             },
-                            onDelete = { onDeleteSearchHistory(entry.id) },
-                            title = entry.query,
-                            url = entry.timestamp.toString() // Placeholder or actual time
-                        )
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                                .height(44.dp),
+                            shape = RoundedCornerShape(22.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Search,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text("搜尋並前往", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+
+                    if (searchHistory.isNotEmpty()) {
+                        item(key = "history_header") {
+                            ListHeader {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Icon(
+                                        Icons.Default.History,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                    Text("最近搜尋記錄", style = MaterialTheme.typography.titleSmall)
+                                }
+                            }
+                        }
+                        items(items = searchHistory.take(5), key = { "search_hist_${it.id}" }) { entry ->
+                            CompactListRow(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    onSearchQueryChange(entry.query)
+                                },
+                                onDelete = { onDeleteSearchHistory(entry.id) },
+                                title = entry.query,
+                                url = "搜尋記錄"
+                            )
+                        }
+                    }
+
+                    item(key = "bottom_spacer") {
+                        Spacer(modifier = Modifier.height(56.dp))
                     }
                 }
 
-                item {
-                    Spacer(modifier = Modifier.height(56.dp))
-                }
+                PositionIndicator(
+                    scalingLazyListState = searchListState,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                )
             }
-
-            PositionIndicator(
-                scalingLazyListState = searchListState,
-                modifier = Modifier.align(Alignment.CenterEnd)
-            )
         }
     }
-}
 }
 
 @Composable
@@ -3797,60 +4463,104 @@ fun SearchMethodDialog(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
-                .padding(8.dp),
+                .padding(12.dp),
             contentAlignment = Alignment.Center
         ) {
             Column(
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp)
             ) {
-                Text(
-                    text = "使用Google搜尋",
-                    style = MaterialTheme.typography.titleMedium,
-                    textAlign = TextAlign.Center,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(20.dp)
+                    )
+                    Text(
+                        text = "選擇搜尋方式",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
+                }
                 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 語音搜尋按鈕
-                    IconButton(
+                    // 語音搜尋卡片
+                    Card(
                         onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             onVoiceSearch()
                             onDismiss()
                         },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                         modifier = Modifier
                             .weight(1f)
-                            .height(64.dp)
-                            .padding(horizontal = 12.dp)
+                            .height(72.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Mic,
-                            contentDescription = "語音搜尋",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Mic,
+                                contentDescription = "語音搜尋",
+                                tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                modifier = Modifier.size(26.dp)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "語音搜尋",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onPrimaryContainer
+                            )
+                        }
                     }
 
-                    // 鍵盤搜尋按鈕
-                    IconButton(
+                    // 鍵盤搜尋卡片
+                    Card(
                         onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                             onKeyboardSearch()
                             onDismiss()
                         },
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
                         modifier = Modifier
                             .weight(1f)
-                            .height(64.dp)
-                            .padding(horizontal = 12.dp)
+                            .height(72.dp)
                     ) {
-                        Icon(
-                            imageVector = Icons.Default.Keyboard,
-                            contentDescription = "鍵盤搜尋",
-                            tint = MaterialTheme.colorScheme.primary
-                        )
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Keyboard,
+                                contentDescription = "鍵盤搜尋",
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(26.dp)
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                "鍵盤輸入",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                        }
                     }
                 }
             }
@@ -3884,7 +4594,11 @@ fun SettingsDialog(
     imageCacheSize: String,
     voiceCacheSize: String,
     onClearCache: () -> Unit,
-    onRefreshCache: () -> Unit
+    onRefreshCache: () -> Unit,
+    isOneHandedGesturesEnabled: Boolean = true,
+    onToggleOneHandedGestures: () -> Unit = {},
+    gestureSensitivity: String = "標準",
+    onSetGestureSensitivity: (String) -> Unit = {}
 ) {
     if (!show) return
 
@@ -3910,6 +4624,7 @@ fun SettingsDialog(
             scrollState = settingsListState,
             bottomButton = {
                 EdgeButton(
+                    modifier = Modifier.height(60.dp),
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onDismiss()
@@ -4053,6 +4768,112 @@ fun SettingsDialog(
                                     if (isCircularSafeMode) "完整顯示不裁剪" else "網頁可能被裁剪", 
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // --- 單手體感手勢控制 ---
+                item {
+                    ListHeader {
+                        Text("單手體感手勢", style = MaterialTheme.typography.titleSmall)
+                    }
+                }
+
+                item {
+                    SwitchButton(
+                        checked = isOneHandedGesturesEnabled,
+                        onCheckedChange = { 
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onToggleOneHandedGestures() 
+                        },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.PanTool,
+                                contentDescription = null,
+                                tint = if (isOneHandedGesturesEnabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text("單手體感手勢操作", style = MaterialTheme.typography.labelMedium)
+                                Text(
+                                    if (isOneHandedGesturesEnabled) "雙指捏合 / 翻轉手腕" else "手勢操作已關閉", 
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (isOneHandedGesturesEnabled) {
+                    item {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp, vertical = 2.dp)
+                                .background(
+                                    color = MaterialTheme.colorScheme.surfaceContainer,
+                                    shape = RoundedCornerShape(16.dp)
+                                )
+                                .padding(8.dp)
+                        ) {
+                            Text("手勢感應靈敏度", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceEvenly,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                val sensitivities = listOf("低靈敏度", "標準", "高靈敏度")
+                                sensitivities.forEach { sens ->
+                                    val isSelected = gestureSensitivity == sens
+                                    Button(
+                                        onClick = { 
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            onSetGestureSensitivity(sens) 
+                                        },
+                                        modifier = Modifier.height(28.dp).weight(1f).padding(horizontal = 2.dp),
+                                        colors = ButtonDefaults.buttonColors(
+                                            containerColor = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceContainerHigh,
+                                            contentColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurface
+                                        ),
+                                        contentPadding = PaddingValues(0.dp)
+                                    ) {
+                                        Text(sens, style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    item {
+                        Card(
+                            onClick = {},
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh),
+                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp)
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp)) {
+                                Text(
+                                    "💡 手勢操作指南",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    "• 雙指捏合 (Double Pinch)：在首頁開啟語音搜尋；在網頁觸發朗讀\n• 翻轉手腕 (Wrist Turn)：快速關閉彈出面板或返回上一頁",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    lineHeight = 14.sp
                                 )
                             }
                         }
@@ -4308,7 +5129,7 @@ fun SettingsDialog(
                         ) {
                             Text(
                                 "快取資源統計 (點擊清除)",
-                                color = MaterialTheme.colorScheme.primary,
+                                
                                 style = MaterialTheme.typography.labelMedium
                             )
                             Spacer(modifier = Modifier.height(6.dp))
@@ -4492,6 +5313,7 @@ fun AboutDialog(
             scrollState = listState,
             bottomButton = {
                 EdgeButton(
+                    modifier = Modifier.height(60.dp),
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onDismiss()
@@ -4901,6 +5723,7 @@ fun AllBookmarksDialog(
             scrollState = bookmarkListState,
             bottomButton = {
                 EdgeButton(
+                    modifier = Modifier.height(60.dp),
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onDismiss()
@@ -4965,22 +5788,54 @@ fun AllBookmarksDialog(
                     }
                 } else {
                     items(items = bookmarks, key = { it.url }) { bookmark ->
-                        CompactListRow(
-                            onClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                onNavigate(bookmark.url)
-                                onDismiss()
+                        val dismissState = rememberSwipeToDismissBoxState(
+                            confirmValueChange = {
+                                if (it == SwipeToDismissBoxValue.EndToStart) {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    onDeleteBookmark(bookmark)
+                                    true
+                                } else {
+                                    false
+                                }
+                            }
+                        )
+                        SwipeToDismissBox(
+                            state = dismissState,
+                            backgroundContent = {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 4.dp, vertical = 2.dp)
+                                        .background(MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(28.dp))
+                                        .padding(horizontal = 16.dp),
+                                    contentAlignment = Alignment.CenterEnd
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Delete,
+                                        contentDescription = "刪除",
+                                        tint = MaterialTheme.colorScheme.onErrorContainer
+                                    )
+                                }
                             },
-                            onLongClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onEditBookmark(bookmark)
-                            },
-                            onDelete = {
-                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                onDeleteBookmark(bookmark)
-                            },
-                            title = bookmark.title,
-                            url = bookmark.url
+                            content = {
+                                CompactListRow(
+                                    onClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onNavigate(bookmark.url)
+                                        onDismiss()
+                                    },
+                                    onLongClick = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        onEditBookmark(bookmark)
+                                    },
+                                    onDelete = {
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        onDeleteBookmark(bookmark)
+                                    },
+                                    title = bookmark.title,
+                                    url = bookmark.url
+                                )
+                            }
                         )
                     }
                 }
@@ -5004,13 +5859,54 @@ fun DownloadsDialog(
     show: Boolean,
     onDismiss: () -> Unit,
     downloadedFiles: List<com.example.data.DownloadedFile>,
+    activeDownloads: List<com.example.data.DownloadTask> = emptyList(),
     onNavigate: (String) -> Unit,
-    onDeleteDownloadedFile: (Long, String) -> Unit
+    onDeleteDownloadedFile: (Long, String) -> Unit,
+    onPauseDownload: (String) -> Unit = {},
+    onResumeDownload: (String) -> Unit = {},
+    onCancelDownload: (String) -> Unit = {},
+    onInitiateDownload: (String, String?) -> Unit = { _, _ -> },
+    onClearCompletedDownloads: () -> Unit = {},
+    onClearAllDownloadedFiles: () -> Unit = {},
+    getStorageUsageInfo: () -> com.example.data.StorageUsageInfo = { com.example.data.StorageUsageInfo(0L, 0L, 0L) }
 ) {
     if (!show) return
 
+    val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
-    val coroutineScope = rememberCoroutineScope()
+    var selectedCategory by remember { mutableIntStateOf(0) } // 0: 全部, 1: 媒體, 2: 文件, 3: 壓縮/軟體
+    var showManualDownloadDialog by remember { mutableStateOf(false) }
+    var selectedFileForDetail by remember { mutableStateOf<com.example.data.DownloadedFile?>(null) }
+    var storageInfo by remember { mutableStateOf(getStorageUsageInfo()) }
+
+    LaunchedEffect(show, downloadedFiles.size, activeDownloads.size) {
+        storageInfo = getStorageUsageInfo()
+    }
+
+    // 分類篩選邏輯
+    val filteredCompletedFiles = remember(downloadedFiles, selectedCategory) {
+        when (selectedCategory) {
+            1 -> downloadedFiles.filter {
+                val mime = it.mimeType.lowercase()
+                val ext = it.fileName.substringAfterLast('.', "").lowercase()
+                mime.startsWith("image/") || mime.startsWith("video/") || mime.startsWith("audio/") ||
+                        ext in listOf("jpg", "jpeg", "png", "gif", "webp", "mp4", "mkv", "mp3", "wav")
+            }
+            2 -> downloadedFiles.filter {
+                val mime = it.mimeType.lowercase()
+                val ext = it.fileName.substringAfterLast('.', "").lowercase()
+                mime.contains("pdf") || mime.contains("document") || mime.contains("text") ||
+                        ext in listOf("pdf", "doc", "docx", "txt", "html", "json")
+            }
+            3 -> downloadedFiles.filter {
+                val mime = it.mimeType.lowercase()
+                val ext = it.fileName.substringAfterLast('.', "").lowercase()
+                mime.contains("zip") || mime.contains("compressed") ||
+                        ext in listOf("zip", "rar", "7z", "apk", "bin", "tar", "gz")
+            }
+            else -> downloadedFiles
+        }
+    }
 
     ExpressiveDialog(onDismissRequest = onDismiss) {
         val listState = rememberScalingLazyListState()
@@ -5028,6 +5924,7 @@ fun DownloadsDialog(
             scrollState = listState,
             bottomButton = {
                 EdgeButton(
+                    modifier = Modifier.height(60.dp),
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onDismiss()
@@ -5046,7 +5943,7 @@ fun DownloadsDialog(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.background)
-                    .padding(8.dp),
+                    .padding(6.dp),
                 contentAlignment = Alignment.Center
             ) {
                 ScalingLazyColumn(
@@ -5061,82 +5958,567 @@ fun DownloadsDialog(
                         },
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                item {
-                    ListHeader {
-                        Text("下載項目", style = MaterialTheme.typography.titleMedium)
-                    }
-                }
-
-                if (downloadedFiles.isEmpty()) {
                     item {
-                        Text("尚無下載檔案", style = MaterialTheme.typography.bodySmall)
+                        ListHeader {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Download,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Text("進階下載管理", style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
                     }
-                } else {
-                    items(items = downloadedFiles, key = { it.id }) { file ->
-                        val cardInt = remember { MutableInteractionSource() }
+
+                    // 1. 手錶儲存空間使用量儀表 (Watch Storage Usage Bar)
+                    item {
                         Card(
+                            onClick = {},
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 4.dp),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)
+                        ) {
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text("手錶儲存空間", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                                    Text(
+                                        "${formatFileSize(storageInfo.usedBytes)} / ${formatFileSize(storageInfo.totalBytes)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                val usedRatio = if (storageInfo.totalBytes > 0) (storageInfo.usedBytes.toFloat() / storageInfo.totalBytes).coerceIn(0f, 1f) else 0.3f
+                                androidx.compose.material3.LinearProgressIndicator(
+                                    progress = { usedRatio },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp)),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    trackColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                                )
+                                Text(
+                                    "下載夾佔用：${formatFileSize(storageInfo.downloadsFolderBytes)}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    // 2. 新增手動下載網址按鈕 (Initiate Manual Download)
+                    item {
+                        val manualInt = remember { MutableInteractionSource() }
+                        Button(
                             onClick = {
                                 haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                                onNavigate("file://${file.localPath}")
-                                onDismiss()
+                                showManualDownloadDialog = true
                             },
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 4.dp)
-                                .expressiveScale(cardInt),
-                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-                            interactionSource = cardInt
+                                .expressiveScale(manualInt),
+                            interactionSource = manualInt
                         ) {
                             Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        file.fileName,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        maxLines = 1,
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        formatFileSize(file.fileSize),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
+                                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Text("➕ 新增手動下載網址", style = MaterialTheme.typography.labelMedium)
+                            }
+                        }
+                    }
+
+                    // 3. 進行中的下載任務 (Active Downloads)
+                    if (activeDownloads.isNotEmpty()) {
+                        item {
+                            ListHeader {
+                                Text("進行中的下載 (${activeDownloads.size})", style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+
+                        items(items = activeDownloads, key = { "active_${it.id}" }) { task ->
+                            Card(
+                                onClick = {},
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = when (task.status) {
+                                        com.example.data.DownloadStatus.DOWNLOADING -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                                        com.example.data.DownloadStatus.PAUSED -> MaterialTheme.colorScheme.surfaceContainerHigh
+                                        com.example.data.DownloadStatus.FAILED -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+                                        else -> MaterialTheme.colorScheme.surfaceContainer
+                                    }
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            task.fileName,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1,
+                                            modifier = Modifier.weight(1f),
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            when (task.status) {
+                                                com.example.data.DownloadStatus.DOWNLOADING -> "${task.progress}%"
+                                                com.example.data.DownloadStatus.PAUSED -> "已暫停"
+                                                com.example.data.DownloadStatus.COMPLETED -> "已完成"
+                                                com.example.data.DownloadStatus.FAILED -> "失敗"
+                                                com.example.data.DownloadStatus.CANCELLED -> "已取消"
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = if (task.status == com.example.data.DownloadStatus.DOWNLOADING) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    if (task.status == com.example.data.DownloadStatus.DOWNLOADING || task.status == com.example.data.DownloadStatus.PAUSED) {
+                                        androidx.compose.material3.LinearProgressIndicator(
+                                            progress = { (task.progress.toFloat() / 100f).coerceIn(0f, 1f) },
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .height(7.dp)
+                                                .clip(RoundedCornerShape(3.5.dp)),
+                                            color = if (task.status == com.example.data.DownloadStatus.DOWNLOADING) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                        )
+                                    }
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            if (task.status == com.example.data.DownloadStatus.DOWNLOADING) {
+                                                "${formatFileSize(task.bytesDownloaded)} / ${if (task.totalBytes > 0) formatFileSize(task.totalBytes) else "未知"} (${String.format("%.1f", task.speedKbps)} KB/s)"
+                                            } else {
+                                                formatFileSize(task.bytesDownloaded)
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+
+                                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                                            if (task.status == com.example.data.DownloadStatus.DOWNLOADING) {
+                                                IconButton(
+                                                    onClick = { onPauseDownload(task.id) },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.Pause, contentDescription = "暫停", modifier = Modifier.size(16.dp))
+                                                }
+                                            } else if (task.status == com.example.data.DownloadStatus.PAUSED) {
+                                                IconButton(
+                                                    onClick = { onResumeDownload(task.id) },
+                                                    modifier = Modifier.size(28.dp)
+                                                ) {
+                                                    Icon(Icons.Default.PlayArrow, contentDescription = "繼續", modifier = Modifier.size(16.dp))
+                                                }
+                                            }
+                                            IconButton(
+                                                onClick = { onCancelDownload(task.id) },
+                                                modifier = Modifier.size(28.dp)
+                                            ) {
+                                                Icon(Icons.Default.Close, contentDescription = "取消", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
+                                            }
+                                        }
+                                    }
                                 }
-                                IconButton(
+                            }
+                        }
+                    }
+
+                    // 4. 分類標籤篩選列 (Category Pills)
+                    item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceEvenly
+                        ) {
+                            val categories = listOf("全部", "媒體", "文件", "軟體/壓縮")
+                            categories.forEachIndexed { index, title ->
+                                val isSelected = selectedCategory == index
+                                CompactChip(
                                     onClick = {
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        onDeleteDownloadedFile(file.id, file.localPath)
+                                        haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                        selectedCategory = index
                                     },
-                                    modifier = Modifier.size(32.dp)
+                                    label = { Text(title, fontSize = 10.sp) },
+                                    colors = if (isSelected) {
+                                        ChipDefaults.chipColors(backgroundColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)
+                                    } else {
+                                        ChipDefaults.chipColors(backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    // 5. 已完成的檔案列表 (Completed Downloaded Files)
+                    item {
+                        ListHeader {
+                            Text("已完成的檔案 (${filteredCompletedFiles.size})", style = MaterialTheme.typography.titleSmall)
+                        }
+                    }
+
+                    if (filteredCompletedFiles.isEmpty()) {
+                        item {
+                            Text("目前沒有此類別的下載檔案", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    } else {
+                        items(items = filteredCompletedFiles, key = { it.id }) { file ->
+                            val cardInt = remember { MutableInteractionSource() }
+                            val (typeIcon, iconColor) = getFileTypeIcon(file.mimeType, file.fileName)
+
+                            Card(
+                                onClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                    selectedFileForDetail = file
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 4.dp)
+                                    .expressiveScale(cardInt),
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                                interactionSource = cardInt
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Icon(
-                                        Icons.Default.Delete,
-                                        contentDescription = "刪除檔案",
-                                        tint = MaterialTheme.colorScheme.error,
-                                        modifier = Modifier.size(16.dp)
+                                        imageVector = typeIcon,
+                                        contentDescription = null,
+                                        tint = iconColor,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            file.fileName,
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                        Text(
+                                            formatFileSize(file.fileSize),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onDeleteDownloadedFile(file.id, file.localPath)
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Delete,
+                                            contentDescription = "刪除檔案",
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 6. 清理與維護功能 (Clear Completed Tasks & All Files)
+                    if (activeDownloads.any { it.status == com.example.data.DownloadStatus.COMPLETED } || downloadedFiles.isNotEmpty()) {
+                        item {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 8.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                if (activeDownloads.any { it.status == com.example.data.DownloadStatus.COMPLETED }) {
+                                    CompactChip(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                            onClearCompletedDownloads()
+                                        },
+                                        label = { Text("清除已完成的任務標籤") },
+                                        colors = ChipDefaults.chipColors(backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    )
+                                }
+
+                                if (downloadedFiles.isNotEmpty()) {
+                                    CompactChip(
+                                        onClick = {
+                                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                            onClearAllDownloadedFiles()
+                                        },
+                                        label = { Text("清空所有下載紀錄與檔案", color = MaterialTheme.colorScheme.error) },
+                                        colors = ChipDefaults.chipColors(backgroundColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.3f))
                                     )
                                 }
                             }
                         }
                     }
+
+                    item {
+                        Spacer(modifier = Modifier.height(56.dp))
+                    }
                 }
 
-                item {
-                    Spacer(modifier = Modifier.height(56.dp))
-                }
+                PositionIndicator(
+                    scalingLazyListState = listState,
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                )
+            }
+        }
+    }
+
+    // 7. 手動輸入下載網址對話框
+    if (showManualDownloadDialog) {
+        InitiateDownloadDialog(
+            show = showManualDownloadDialog,
+            onDismiss = { showManualDownloadDialog = false },
+            onConfirmDownload = { url, customName ->
+                onInitiateDownload(url, customName)
+                showManualDownloadDialog = false
+            }
+        )
+    }
+
+    // 8. 檔案詳情與操作選單對話框 (File Action Sheet)
+    selectedFileForDetail?.let { file ->
+        FileDetailActionDialog(
+            file = file,
+            onDismiss = { selectedFileForDetail = null },
+            onOpenFile = {
+                onNavigate("file://${file.localPath}")
+                selectedFileForDetail = null
+                onDismiss()
+            },
+            onReDownload = {
+                onInitiateDownload(file.url, file.fileName)
+                selectedFileForDetail = null
+            },
+            onDelete = {
+                onDeleteDownloadedFile(file.id, file.localPath)
+                selectedFileForDetail = null
+            }
+        )
+    }
+}
+
+/**
+ * 檔案類型對應圖示與色彩
+ */
+private fun getFileTypeIcon(mimeType: String, fileName: String): Pair<ImageVector, Color> {
+    val lowerMime = mimeType.lowercase()
+    val ext = fileName.substringAfterLast('.', "").lowercase()
+    return when {
+        lowerMime.startsWith("image/") || ext in listOf("jpg", "jpeg", "png", "gif", "webp", "svg") ->
+            Icons.Default.Image to Color(0xFF38BDF8)
+        lowerMime.startsWith("video/") || ext in listOf("mp4", "mkv", "webm", "avi") ->
+            Icons.Default.Movie to Color(0xFFF43F5E)
+        lowerMime.startsWith("audio/") || ext in listOf("mp3", "wav", "ogg", "flac") ->
+            Icons.Default.MusicNote to Color(0xFFA855F7)
+        lowerMime.contains("pdf") || lowerMime.contains("document") || ext in listOf("pdf", "doc", "docx", "txt", "html", "json") ->
+            Icons.Default.Description to Color(0xFFF59E0B)
+        lowerMime.contains("zip") || lowerMime.contains("compressed") || ext in listOf("zip", "rar", "7z", "apk", "tar", "gz", "bin") ->
+            Icons.Default.FolderZip to Color(0xFF10B981)
+        else ->
+            Icons.Default.InsertDriveFile to Color(0xFF94A3B8)
+    }
+}
+
+/**
+ * 手動發起下載對話框
+ */
+@Composable
+fun InitiateDownloadDialog(
+    show: Boolean,
+    onDismiss: () -> Unit,
+    onConfirmDownload: (url: String, fileName: String?) -> Unit
+) {
+    if (!show) return
+
+    var inputUrl by remember { mutableStateOf("https://") }
+    var customFileName by remember { mutableStateOf("") }
+    val haptic = LocalHapticFeedback.current
+
+    ExpressiveDialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text("新增手動下載", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = inputUrl,
+                onValueChange = { inputUrl = it },
+                label = { Text("下載檔案 URL", fontSize = 11.sp) },
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp)
+            )
+
+            Spacer(modifier = Modifier.height(6.dp))
+
+            OutlinedTextField(
+                value = customFileName,
+                onValueChange = { customFileName = it },
+                label = { Text("自訂檔名 (可選)", fontSize = 11.sp) },
+                modifier = Modifier.fillMaxWidth(),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 11.sp)
+            )
+
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                CompactChip(
+                    onClick = { onDismiss() },
+                    label = { Text("取消") },
+                    colors = ChipDefaults.chipColors(backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+                )
+
+                CompactChip(
+                    onClick = {
+                        if (inputUrl.isNotBlank() && inputUrl != "https://") {
+                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            onConfirmDownload(inputUrl.trim(), customFileName.ifBlank { null })
+                        }
+                    },
+                    label = { Text("開始下載") },
+                    colors = ChipDefaults.chipColors(backgroundColor = MaterialTheme.colorScheme.primary, contentColor = MaterialTheme.colorScheme.onPrimary)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 已下載檔案詳細操作選單對話框 (File Details Action Sheet)
+ */
+@Composable
+fun FileDetailActionDialog(
+    file: com.example.data.DownloadedFile,
+    onDismiss: () -> Unit,
+    onOpenFile: () -> Unit,
+    onReDownload: () -> Unit,
+    onDelete: () -> Unit
+) {
+    val context = LocalContext.current
+    val haptic = LocalHapticFeedback.current
+    val (typeIcon, iconColor) = getFileTypeIcon(file.mimeType, file.fileName)
+
+    ExpressiveDialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(12.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(typeIcon, contentDescription = null, tint = iconColor, modifier = Modifier.size(20.dp))
+                Text(file.fileName, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
 
-            PositionIndicator(
-                scalingLazyListState = listState,
-                modifier = Modifier.align(Alignment.CenterEnd)
+            Text(
+                "大小：${formatFileSize(file.fileSize)} | 格式：${file.mimeType}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Button(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onOpenFile()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+            ) {
+                Text("📂 開啟 / 預覽檔案", fontSize = 11.sp)
+            }
+
+            Button(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    val clip = android.content.ClipData.newPlainText("Download URL", file.url)
+                    clipboard.setPrimaryClip(clip)
+                    Toast.makeText(context, "已複製下載連結", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+            ) {
+                Text("📋 複製下載連結", fontSize = 11.sp)
+            }
+
+            Button(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    onReDownload()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.surfaceContainerHigh)
+            ) {
+                Text("🔄 重新下載檔案", fontSize = 11.sp)
+            }
+
+            Button(
+                onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    onDelete()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.errorContainer)
+            ) {
+                Text("🗑️ 刪除檔案與紀錄", color = MaterialTheme.colorScheme.error, fontSize = 11.sp)
+            }
+
+            CompactChip(
+                onClick = onDismiss,
+                label = { Text("返回") },
+                colors = ChipDefaults.chipColors(backgroundColor = MaterialTheme.colorScheme.surfaceContainerHigh)
             )
         }
     }
 }
-}
+
 
 @Composable
 fun QrDialog(
@@ -5164,6 +6546,7 @@ fun QrDialog(
             scrollState = qrListState,
             bottomButton = {
                 EdgeButton(
+                    modifier = Modifier.height(60.dp),
                     onClick = {
                         onDismiss()
                     }
@@ -5279,7 +6662,7 @@ fun LoadingOverlay(progress: Int) {
         CircularProgressIndicator(
             progress = { progress / 100f },
             modifier = Modifier.fillMaxSize(),
-            strokeWidth = 4.dp
+            strokeWidth = 8.dp
         )
 
         Text(
@@ -5431,6 +6814,7 @@ fun SecurityDialog(
             scrollState = listState,
             bottomButton = {
                 EdgeButton(
+                    modifier = Modifier.height(60.dp),
                     onClick = {
                         haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onDismiss()
