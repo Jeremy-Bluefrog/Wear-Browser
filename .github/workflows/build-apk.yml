@@ -14,14 +14,14 @@ on:
   workflow_dispatch:
     inputs:
       build_type:
-        description: '選擇要建置的 APK 類型 (all / debug / release)'
+        description: '選擇建置類型: release (推薦) / debug / all'
         required: true
         default: 'all'
         type: choice
         options:
           - all
-          - debug
           - release
+          - debug
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -38,7 +38,7 @@ jobs:
       - name: 檢出程式碼 (Checkout Code)
         uses: actions/checkout@v4
 
-      - name: 設定 JDK 21 (Setup Java 21 for AGP 9.x)
+      - name: 設定 JDK 21 (Setup Java 21)
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
@@ -51,7 +51,7 @@ jobs:
         run: |
           echo "=== 準備 .env 與 google-services.json 配置文件 ==="
           
-          # 1. 確保 .env 存在 (避免 Secrets Gradle Plugin 報錯)
+          # 1. 確保 .env 存在
           if [ -f ".env.example" ] && [ ! -f ".env" ]; then
             cp .env.example .env
             echo "已從 .env.example 建立 .env"
@@ -61,7 +61,7 @@ jobs:
             echo "已建立預設 .env"
           fi
 
-          # 2. 確保 app/google-services.json 存在 (避免 Google Services / Crashlytics 外掛報錯)
+          # 2. 確保 app/google-services.json 存在
           if [ ! -f "app/google-services.json" ]; then
             cat << 'EOF' > app/google-services.json
           {
@@ -94,11 +94,11 @@ jobs:
             "configuration_version": "1"
           }
           EOF
-            echo "已自動產生佔位 app/google-services.json 滿足 CI 建置需求"
+            echo "已自動產生佔位 app/google-services.json"
           fi
 
           echo "=== 設定 Debug 與 Release 簽署金鑰 ==="
-          # 3. 復原 Debug Keystore (若有 base64 則還原，若無則自動生成)
+          # 3. 復原 Debug Keystore
           if [ -f "debug.keystore.base64" ]; then
             base64 -d debug.keystore.base64 > debug.keystore
             echo "已從 debug.keystore.base64 還原 debug.keystore"
@@ -107,7 +107,7 @@ jobs:
             echo "已自動生成 debug.keystore"
           fi
 
-          # 4. 準備 Release Keystore (若環境未提供自訂 KEYSTORE_PATH 則生成預設 release key 以保證成功構建)
+          # 4. 準備 Release Keystore
           if [ ! -f "my-upload-key.jks" ] && [ -z "$KEYSTORE_PATH" ]; then
             keytool -genkey -v -keystore my-upload-key.jks -storepass android -alias upload -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Pixel Browser,O=WearOS,C=US"
             echo "已自動生成 my-upload-key.jks"
@@ -116,41 +116,50 @@ jobs:
       - name: 賦予 Gradlew 執行權限 (Set Executable Permissions)
         run: chmod +x gradlew
 
-      - name: 建置 Debug APK (Build Debug APK)
-        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'debug' }}
-        env:
-          STORE_PASSWORD: "android"
-          KEY_PASSWORD: "android"
-        run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace
-
-      - name: 建置 Release APK (Build Release APK)
+      - name: 建置 Release APK (優化壓縮與混淆，體積最小推薦)
         if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'release' }}
         env:
           STORE_PASSWORD: "android"
           KEY_PASSWORD: "android"
         run: |
-          ./gradlew assembleRelease --no-daemon --stacktrace
+          ./gradlew assembleRelease -Djava.awt.headless=true --no-daemon --stacktrace
+
+      - name: 建置 Debug APK (除錯專用)
+        if: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.build_type == 'all' || github.event.inputs.build_type == 'debug' }}
+        env:
+          STORE_PASSWORD: "android"
+          KEY_PASSWORD: "android"
+        run: |
+          ./gradlew assembleDebug -Djava.awt.headless=true --no-daemon --stacktrace
 
       - name: 整理輸出 APK 檔案 (Collect Artifacts)
         run: |
           mkdir -p output-apks
+          # 複製 Release APK (前綴清楚，避免手機端被截斷)
+          if compgen -G "app/build/outputs/apk/release/*.apk" > /dev/null; then
+            cp app/build/outputs/apk/release/*.apk output-apks/Release-PixelBrowser-v7a.apk
+            echo "已收集 Release-PixelBrowser-v7a.apk (推薦安裝)"
+          fi
           # 複製 Debug APK
           if compgen -G "app/build/outputs/apk/debug/*.apk" > /dev/null; then
-            cp app/build/outputs/apk/debug/*.apk output-apks/PixelBrowser-WearOS-armeabi-v7a-debug.apk
-            echo "已收集 Debug APK"
+            cp app/build/outputs/apk/debug/*.apk output-apks/Debug-PixelBrowser-v7a.apk
+            echo "已收集 Debug-PixelBrowser-v7a.apk"
           fi
-          # 複製 Release APK
-          if compgen -G "app/build/outputs/apk/release/*.apk" > /dev/null; then
-            cp app/build/outputs/apk/release/*.apk output-apks/PixelBrowser-WearOS-armeabi-v7a-release.apk
-            echo "已收集 Release APK"
-          fi
-          ls -la output-apks/
+          echo "=== 構建產出檔案清單與大小 ==="
+          ls -lh output-apks/
 
-      - name: 上傳 APK 構建成品 (Upload APK Artifacts)
+      - name: 上傳 Release APK (推薦安裝版本)
+        if: hashFiles('output-apks/Release-PixelBrowser-v7a.apk') != ''
         uses: actions/upload-artifact@v4
         with:
-          name: PixelBrowser-WearOS-armeabi-v7a-APKs
+          name: Release-PixelBrowser-v7a
+          path: output-apks/Release-PixelBrowser-v7a.apk
+          retention-days: 30
+
+      - name: 上傳全部 APK (Debug + Release 打包)
+        uses: actions/upload-artifact@v4
+        with:
+          name: PixelBrowser-WearOS-v7a-All
           path: output-apks/*.apk
           retention-days: 30
 

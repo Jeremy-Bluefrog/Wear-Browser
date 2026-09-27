@@ -1,4 +1,11 @@
 # Add project specific ProGuard rules here.
+-keep class org.mozilla.geckoview.** { *; }
+-dontwarn org.mozilla.geckoview.**
+-keep class org.jsoup.** { *; }
+-keep class androidx.room.** { *; }
+-dontwarn androidx.room.**
+-keep class coil.** { *; }
+
 # You can control the set of applied configuration files using the
 # proguardFiles setting in build.gradle.
 #

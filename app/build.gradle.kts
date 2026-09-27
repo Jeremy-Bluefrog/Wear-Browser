@@ -16,7 +16,7 @@ android {
 
   defaultConfig {
     applicationId = "com.aistudio.wearbrowser.zvpxkl"
-    minSdk = 35
+    minSdk = 26
     targetSdk = 37
     versionCode = 1
     versionName = "1.0"
@@ -47,8 +47,8 @@ android {
 
   buildTypes {
     release {
-      isCrunchPngs = false
-      isMinifyEnabled = false
+      isCrunchPngs = true
+      isMinifyEnabled = true
       proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
       signingConfig = signingConfigs.getByName("release")
     }
@@ -63,6 +63,19 @@ android {
   buildFeatures {
     compose = true
     buildConfig = true
+  }
+  packaging {
+    resources {
+      excludes += listOf(
+        "/META-INF/{AL2.0,LGPL2.1}",
+        "META-INF/DEPENDENCIES",
+        "META-INF/LICENSE",
+        "META-INF/LICENSE.txt"
+      )
+    }
+    jniLibs {
+      useLegacyPackaging = true
+    }
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
 }
