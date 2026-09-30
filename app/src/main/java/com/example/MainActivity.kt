@@ -1,5 +1,6 @@
 package com.example
 
+import android.content.ComponentCallbacks2
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -9,7 +10,6 @@ import com.example.ui.BrowserScreen
 import com.example.ui.BrowserViewModel
 import com.example.ui.theme.WearAppTheme
 import com.example.wear.WearOsCompatLayer
-import java.io.File
 
 class MainActivity : ComponentActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -17,20 +17,6 @@ class MainActivity : ComponentActivity() {
     
     // Initialize Wear OS API compatibility layer
     WearOsCompatLayer.initialize()
-    
-    // Proactively create WebView Code Cache directories to prevent Chromium startup errors
-    try {
-      val webViewCacheJs = File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/js")
-      if (!webViewCacheJs.exists()) {
-        webViewCacheJs.mkdirs()
-      }
-      val webViewCacheWasm = File(cacheDir, "WebView/Default/HTTP Cache/Code Cache/wasm")
-      if (!webViewCacheWasm.exists()) {
-        webViewCacheWasm.mkdirs()
-      }
-    } catch (e: Exception) {
-      e.printStackTrace()
-    }
 
     enableEdgeToEdge()
     setContent {
@@ -41,9 +27,10 @@ class MainActivity : ComponentActivity() {
     }
   }
 
+  @Suppress("DEPRECATION")
   override fun onTrimMemory(level: Int) {
     super.onTrimMemory(level)
-    if (level >= TRIM_MEMORY_RUNNING_LOW) {
+    if (level >= ComponentCallbacks2.TRIM_MEMORY_COMPLETE) {
       System.gc()
     }
   }

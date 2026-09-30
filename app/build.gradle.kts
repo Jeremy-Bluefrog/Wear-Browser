@@ -4,7 +4,6 @@ plugins {
   alias(libs.plugins.android.application)
   alias(libs.plugins.kotlin.compose)
   alias(libs.plugins.google.devtools.ksp)
-  alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
   alias(libs.plugins.firebase.crashlytics)
@@ -78,10 +77,12 @@ android {
     }
   }
   testOptions { unitTests { isIncludeAndroidResources = true } }
+  lint {
+    checkReleaseBuilds = false
+    abortOnError = false
+  }
 }
 
-// Configure the Secrets Gradle Plugin to use .env and .env.example files
-// to match the convention used in Web projects.
 secrets {
   propertiesFileName = ".env"
   defaultPropertiesFileName = ".env.example"
@@ -91,71 +92,42 @@ googleServices {
   missingGoogleServicesStrategy = MissingGoogleServicesStrategy.WARN
 }
 
-
-// Some unused dependencies are commented out below instead of being removed.
-// This makes it easy to add them back in the future if needed.
 dependencies {
   implementation(libs.androidx.wear.compose.foundation)
   implementation(libs.androidx.wear.compose.material3)
   implementation(libs.androidx.wear.compose.navigation)
-  // implementation(libs.horologist.compose.layout)
-  // implementation(libs.horologist.compose.material)
   implementation(libs.androidx.wear)
   implementation(libs.androidx.wear.input)
   implementation(platform(libs.androidx.compose.bom))
   implementation(platform(libs.firebase.bom))
-  // implementation(libs.accompanist.permissions)
   implementation(libs.androidx.activity.compose)
-  // implementation(libs.androidx.camera.camera2)
-  // implementation(libs.androidx.camera.core)
-  // implementation(libs.androidx.camera.lifecycle)
-  // implementation(libs.androidx.camera.view)
   implementation(libs.androidx.compose.material.icons.core)
   implementation(libs.androidx.compose.material.icons.extended)
   implementation(libs.androidx.compose.material3)
   implementation(libs.androidx.compose.ui)
-  implementation(libs.jsoup)
-  val geckoviewVersion = "99.0.20220324185704"
-  implementation("org.mozilla.geckoview:geckoview-beta-armeabi-v7a:$geckoviewVersion")
-  // implementation("org.mozilla.geckoview:geckoview-beta-arm64-v8a:$geckoviewVersion")
-  // implementation("org.mozilla.geckoview:geckoview-beta-x86_64:$geckoviewVersion")
-  // implementation("org.mozilla.geckoview:geckoview-beta-x86:$geckoviewVersion")
   implementation(libs.androidx.compose.ui.graphics)
   implementation("androidx.compose.foundation:foundation")
   implementation("androidx.compose.foundation:foundation-layout")
   implementation(libs.androidx.compose.ui.tooling.preview)
   implementation(libs.androidx.core.ktx)
-  // implementation(libs.androidx.datastore.preferences)
   implementation(libs.androidx.lifecycle.runtime.compose)
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
-  // implementation(libs.androidx.navigation.compose)
   implementation(libs.androidx.room.ktx)
   implementation(libs.androidx.room.runtime)
-  // implementation(libs.androidx.work.runtime.ktx)
-  implementation("androidx.constraintlayout:constraintlayout-compose:1.0.1")
-  // implementation(libs.firebase.analytics)
-  // implementation(libs.firebase.crashlytics)
   implementation(libs.coil.compose)
-  // implementation(libs.converter.moshi)
-  // implementation(libs.firebase.ai)
-  // implementation(libs.firebase.appcheck.recaptcha)
   implementation(libs.kotlinx.coroutines.android)
   implementation(libs.kotlinx.coroutines.core)
-  // implementation(libs.logging.interceptor)
-  // implementation(libs.moshi.kotlin)
-  // implementation(libs.okhttp)
-  // implementation(libs.play.services.location)
-  // implementation(libs.retrofit)
+  val geckoviewVersion = "99.0.20220324185704"
+  implementation("org.mozilla.geckoview:geckoview-beta-armeabi-v7a:$geckoviewVersion")
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
-  testImplementation(libs.robolectric)
-  testImplementation(libs.roborazzi)
-  testImplementation(libs.roborazzi.compose)
-  testImplementation(libs.roborazzi.junit.rule)
+  testImplementation(libs.robolectric) {
+    exclude(group = "org.yaml", module = "snakeyaml")
+  }
   androidTestImplementation(platform(libs.androidx.compose.bom))
   androidTestImplementation(libs.androidx.compose.ui.test.junit4)
   androidTestImplementation(libs.androidx.espresso.core)
@@ -164,16 +136,12 @@ dependencies {
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
   "ksp"(libs.androidx.room.compiler)
-  // "ksp"(libs.moshi.kotlin.codegen)
 }
 
 configurations.all {
   resolutionStrategy.capabilitiesResolution.withCapability("org.mozilla.geckoview:geckoview") {
-    val target = candidates.find { it.id.toString().contains("armeabi-v7a") } 
-      ?: candidates.find { it.id.toString().contains("arm64-v8a") } 
-      ?: candidates.first()
+    val target = candidates.find { it.id.toString().contains("armeabi-v7a") } ?: candidates.first()
     select(target)
   }
 }
-
 

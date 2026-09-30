@@ -21,34 +21,7 @@ interface BrowserDao {
     @Query("DELETE FROM bookmarks WHERE url = :url")
     suspend fun deleteBookmark(url: String)
 
-    @Query("SELECT * FROM offline_pages ORDER BY timestamp DESC")
-    fun getAllOfflinePages(): Flow<List<OfflinePage>>
-
-    @Query("SELECT * FROM offline_pages WHERE url = :url LIMIT 1")
-    suspend fun getOfflinePageByUrl(url: String): OfflinePage?
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertOfflinePage(page: OfflinePage)
-
-    @Query("DELETE FROM offline_pages WHERE id = :id")
-    suspend fun deleteOfflinePage(id: Long)
-
-    @Query("DELETE FROM offline_pages WHERE url = :url")
-    suspend fun deleteOfflinePageByUrl(url: String)
-
-    @Query("DELETE FROM offline_pages")
-    suspend fun clearAllOfflinePages()
-
-    @Query("SELECT * FROM downloaded_files ORDER BY timestamp DESC")
-    fun getAllDownloadedFiles(): Flow<List<DownloadedFile>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertDownloadedFile(file: DownloadedFile)
-
-    @Query("DELETE FROM downloaded_files WHERE id = :id")
-    suspend fun deleteDownloadedFile(id: Long)
-
-    @Query("SELECT * FROM history_entries ORDER BY timestamp DESC LIMIT 500")
+    @Query("SELECT * FROM history_entries ORDER BY timestamp DESC LIMIT 300")
     fun getAllHistory(): Flow<List<HistoryEntry>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
@@ -60,7 +33,7 @@ interface BrowserDao {
     @Query("DELETE FROM history_entries")
     suspend fun clearAllHistory()
 
-    @Query("SELECT * FROM search_history ORDER BY timestamp DESC LIMIT 200")
+    @Query("SELECT * FROM search_history ORDER BY timestamp DESC LIMIT 100")
     fun getAllSearchHistory(): Flow<List<SearchHistory>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
