@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Delete
@@ -41,21 +42,26 @@ import androidx.wear.compose.material3.CardDefaults
 import androidx.wear.compose.material3.FilledTonalIconButton
 import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.IconButtonDefaults
+import androidx.wear.compose.material3.ListSubheader
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScrollIndicator
 import androidx.wear.compose.material3.Text
 import androidx.wear.compose.material3.TitleCard
 import com.example.data.Bookmark
+import com.example.data.OfflineArticle
 
 /**
- * 深度採用 Wear OS Material 3 規範之書籤管理介面
+ * 深度採用 Wear OS Material 3 規範之書籤與離線文章管理介面
  */
 @Composable
 fun BookmarksScreen(
     isRound: Boolean,
     bookmarks: List<Bookmark>,
+    offlineArticles: List<OfflineArticle> = emptyList(),
     onNavigateUrl: (String) -> Unit,
+    onOpenOfflineArticle: (OfflineArticle) -> Unit = {},
     onDeleteBookmark: (String) -> Unit,
+    onDeleteOfflineArticle: (String) -> Unit = {},
     onAddBookmark: (String, String) -> Unit,
     onBack: () -> Unit
 ) {
@@ -104,7 +110,7 @@ fun BookmarksScreen(
                         )
                     }
                     Text(
-                        text = "書籤 (${bookmarks.size})",
+                        text = "書籤與離線庫",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -124,16 +130,89 @@ fun BookmarksScreen(
                 }
             }
 
-            if (bookmarks.isEmpty()) {
+            // 離線文章區塊
+            if (offlineArticles.isNotEmpty()) {
+                item {
+                    ListSubheader(
+                        modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f)
+                    ) {
+                        Text(text = "離線文章 (${offlineArticles.size})", color = Color(0xFF34D399))
+                    }
+                }
+
+                items(offlineArticles) { article ->
+                    TitleCard(
+                        onClick = { onOpenOfflineArticle(article) },
+                        title = {
+                            Text(
+                                text = article.title,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        subtitle = {
+                            Text(
+                                text = "約 ${article.readingTimeMinutes} 分鐘 · 點擊直接閱讀",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        time = {
+                            FilledTonalIconButton(
+                                onClick = { onDeleteOfflineArticle(article.url) },
+                                modifier = Modifier.size(24.dp),
+                                colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                                    contentColor = MaterialTheme.colorScheme.error
+                                )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "刪除離線文章",
+                                    modifier = Modifier.size(13.dp)
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainer
+                        )
+                    )
+                }
+            }
+
+            // 我的書籤區塊
+            item {
+                ListSubheader(
+                    modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f)
+                ) {
+                    Text(text = "我的書籤 (${bookmarks.size})", color = MaterialTheme.colorScheme.secondary)
+                }
+            }
+
+            if (bookmarks.isEmpty() && offlineArticles.isEmpty()) {
                 item {
                     Text(
-                        text = "目前尚無任何書籤\n點擊右上角 + 或在網頁瀏覽時點擊星號儲存",
+                        text = "目前尚無書籤或離線文章\n瀏覽網頁時點擊星號或儲存離線即可收藏",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center,
                         modifier = Modifier
                             .fillMaxWidth(if (isRound) 0.80f else 0.92f)
-                            .padding(vertical = 24.dp)
+                            .padding(vertical = 18.dp)
+                    )
+                }
+            } else if (bookmarks.isEmpty()) {
+                item {
+                    Text(
+                        text = "尚無自訂網頁書籤",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth(if (isRound) 0.80f else 0.92f)
+                            .padding(vertical = 8.dp)
                     )
                 }
             } else {

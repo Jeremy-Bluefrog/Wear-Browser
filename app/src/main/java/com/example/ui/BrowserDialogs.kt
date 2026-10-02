@@ -19,8 +19,12 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Tab
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.runtime.Composable
@@ -41,15 +45,18 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.wear.compose.foundation.lazy.AutoCenteringParams
 import androidx.wear.compose.foundation.lazy.ScalingLazyColumn
+import androidx.wear.compose.foundation.lazy.items
 import androidx.wear.compose.foundation.lazy.rememberScalingLazyListState
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
+import androidx.wear.compose.material3.CardDefaults
 import androidx.wear.compose.material3.FilledTonalButton
 import androidx.wear.compose.material3.FilledTonalIconButton
 import androidx.wear.compose.material3.Icon
@@ -57,6 +64,7 @@ import androidx.wear.compose.material3.IconButtonDefaults
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScrollIndicator
 import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.TitleCard
 
 /**
  * 網址與搜尋輸入彈窗（深度採用 Wear OS Material 3，無貼邊）
@@ -492,3 +500,161 @@ fun ZoomDialog(
         }
     }
 }
+
+/**
+ * 輕量級多標籤頁管理彈窗（深度採用 Wear OS Material 3，無貼邊）
+ */
+@Composable
+fun TabsManagerDialog(
+    isRound: Boolean,
+    tabs: List<TabInfo>,
+    activeTabId: String,
+    onSelectTab: (String) -> Unit,
+    onCloseTab: (String) -> Unit,
+    onNewTab: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val listState = rememberScalingLazyListState()
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0xF0000000))
+        ) {
+            ScalingLazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                state = listState,
+                autoCentering = AutoCenteringParams(itemIndex = 1),
+                contentPadding = PaddingValues(
+                    top = if (isRound) 44.dp else 18.dp,
+                    bottom = if (isRound) 64.dp else 24.dp,
+                    start = if (isRound) 16.dp else 8.dp,
+                    end = if (isRound) 16.dp else 8.dp
+                ),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                item {
+                    Text(
+                        text = "標籤頁 (${tabs.size}/3)",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f)
+                    )
+                }
+
+                // 各標籤項目
+                items(tabs) { tab ->
+                    val isActive = tab.id == activeTabId
+                    TitleCard(
+                        onClick = {
+                            onSelectTab(tab.id)
+                            onDismiss()
+                        },
+                        title = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (isActive) {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = "使用中",
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                }
+                                Text(
+                                    text = tab.title.ifBlank { "新標籤頁" },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                                    color = if (isActive) MaterialTheme.colorScheme.primary else Color.White
+                                )
+                            }
+                        },
+                        subtitle = {
+                            Text(
+                                text = tab.url,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        },
+                        time = {
+                            if (tabs.size > 1) {
+                                FilledTonalIconButton(
+                                    onClick = { onCloseTab(tab.id) },
+                                    modifier = Modifier.size(24.dp),
+                                    colors = IconButtonDefaults.filledTonalIconButtonColors(
+                                        containerColor = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f),
+                                        contentColor = MaterialTheme.colorScheme.error
+                                    )
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Default.Close,
+                                        contentDescription = "關閉分頁",
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (isActive) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainer
+                            }
+                        )
+                    )
+                }
+
+                // 新增分頁按鈕 (上限 3 個)
+                if (tabs.size < 3) {
+                    item {
+                        FilledTonalButton(
+                            onClick = {
+                                onNewTab()
+                                onDismiss()
+                            },
+                            modifier = Modifier.fillMaxWidth(if (isRound) 0.80f else 0.92f),
+                            label = { Text("開啟新分頁", style = MaterialTheme.typography.labelSmall) },
+                            icon = {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        )
+                    }
+                }
+
+                // 關閉對話框按鈕
+                item {
+                    Button(
+                        onClick = onDismiss,
+                        modifier = Modifier
+                            .fillMaxWidth(if (isRound) 0.55f else 0.70f)
+                            .height(30.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+                        )
+                    ) {
+                        Text(text = "關閉", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+
+            ScrollIndicator(
+                state = listState,
+                modifier = Modifier.align(Alignment.CenterEnd)
+            )
+        }
+    }
+}
+

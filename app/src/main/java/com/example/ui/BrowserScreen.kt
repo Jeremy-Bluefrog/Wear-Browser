@@ -56,19 +56,25 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
 
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
+    val offlineArticles by viewModel.offlineArticles.collectAsStateWithLifecycle()
     val searchEngine by viewModel.searchEngine.collectAsStateWithLifecycle()
     val textZoom by viewModel.textZoom.collectAsStateWithLifecycle()
     val isPureBlackMode by viewModel.isPureBlackMode.collectAsStateWithLifecycle()
     val isAdBlockEnabled by viewModel.isAdBlockEnabled.collectAsStateWithLifecycle()
     val isWristGesturesEnabled by viewModel.isWristGesturesEnabled.collectAsStateWithLifecycle()
     val rotarySpeed by viewModel.rotarySpeed.collectAsStateWithLifecycle()
+    val isIncognitoMode by viewModel.isIncognitoMode.collectAsStateWithLifecycle()
 
     val isReaderMode by viewModel.isReaderMode.collectAsStateWithLifecycle()
     val readerTitle by viewModel.readerTitle.collectAsStateWithLifecycle()
     val readerContent by viewModel.readerContent.collectAsStateWithLifecycle()
 
+    val tabs by viewModel.tabs.collectAsStateWithLifecycle()
+    val activeTabId by viewModel.activeTabId.collectAsStateWithLifecycle()
+
     var showUrlInputDialog by remember { mutableStateOf(false) }
     var showZoomDialog by remember { mutableStateOf(false) }
+    var showTabsDialog by remember { mutableStateOf(false) }
 
     // 依 URL 狀態切換導覽畫面
     LaunchedEffect(currentUrl) {
@@ -125,6 +131,8 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                     showUrlInputDialog = false
                 } else if (showZoomDialog) {
                     showZoomDialog = false
+                } else if (showTabsDialog) {
+                    showTabsDialog = false
                 } else if (currentScreen == ScreenState.BROWSER) {
                     if (canGoBack) {
                         viewModel.geckoState.goBack()
@@ -151,6 +159,18 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
             viewModel.exitReaderMode()
             return@BackHandler
         }
+        if (showUrlInputDialog) {
+            showUrlInputDialog = false
+            return@BackHandler
+        }
+        if (showZoomDialog) {
+            showZoomDialog = false
+            return@BackHandler
+        }
+        if (showTabsDialog) {
+            showTabsDialog = false
+            return@BackHandler
+        }
         when (currentScreen) {
             ScreenState.BROWSER -> {
                 if (canGoBack) {
@@ -174,7 +194,7 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
     AppScaffold {
         ScreenScaffold(
             timeText = {
-                // 瀏覽網頁時自動隱藏 TimeText，讓網頁全螢幕沉浸展示；其餘主頁與設定頁頂部完美曲面呈現當前時間
+                // 瀏覽網頁時自動隱藏 TimeText，讓網頁全螢幕沉浸展示；主頁與設定頁頂部完美曲面呈現當前時間
                 if (currentScreen != ScreenState.BROWSER) {
                     TimeText {
                         time()
@@ -192,11 +212,24 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                         HomeScreen(
                             isRound = isRound,
                             savedBookmarks = bookmarks,
+                            savedOfflineArticles = offlineArticles,
+                            recentHistory = history,
+                            isIncognitoMode = isIncognitoMode,
                             onOpenSearchInput = { showUrlInputDialog = true },
                             onVoiceSearch = { launchVoiceSearch() },
                             onNavigateUrl = { url ->
                                 viewModel.loadUrl(url)
                                 currentScreen = ScreenState.BROWSER
+                            },
+                            onOpenOfflineArticle = { article ->
+                                viewModel.openOfflineArticle(article)
+                                currentScreen = ScreenState.BROWSER
+                            },
+                            onOpenDownloads = { currentScreen = ScreenState.BOOKMARKS },
+                            onToggleIncognito = {
+                                viewModel.toggleIncognitoMode()
+                                val msg = if (!isIncognitoMode) "無痕隱私瀏覽已開啟 🕶️" else "已關閉無痕瀏覽"
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
                             },
                             onOpenBookmarks = { currentScreen = ScreenState.BOOKMARKS },
                             onOpenHistory = { currentScreen = ScreenState.HISTORY },
@@ -218,6 +251,8 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                             readerTitle = readerTitle,
                             readerContent = readerContent,
                             rotarySpeed = rotarySpeed,
+                            tabCount = tabs.size,
+                            isIncognitoMode = isIncognitoMode,
                             onPageStarted = { _ ->
                                 viewModel.updateLoadingState(true, 15)
                             },
@@ -243,6 +278,23 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                             onOpenUrlInput = {
                                 showUrlInputDialog = true
                             },
+                            onOpenTabs = {
+                                showTabsDialog = true
+                            },
+                            onSaveOfflineArticle = {
+                                if (readerContent.isNotBlank()) {
+                                    viewModel.saveOfflineArticle(currentUrl, pageTitle, readerContent)
+                                } else {
+                                    // 若尚未提取閱讀內容，以標題與網址建立書籤備份
+                                    viewModel.addBookmark(currentUrl, pageTitle)
+                                }
+                                Toast.makeText(context, "已收藏至離線庫", Toast.LENGTH_SHORT).show()
+                            },
+                            onToggleIncognito = {
+                                viewModel.toggleIncognitoMode()
+                                val msg = if (!isIncognitoMode) "無痕隱私瀏覽已開啟 🕶️" else "已關閉無痕瀏覽"
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            },
                             onBack = { viewModel.geckoState.goBack() },
                             onForward = { viewModel.geckoState.goForward() },
                             onRefresh = { viewModel.geckoState.reload() },
@@ -264,13 +316,22 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                         BookmarksScreen(
                             isRound = isRound,
                             bookmarks = bookmarks,
+                            offlineArticles = offlineArticles,
                             onNavigateUrl = { url ->
                                 viewModel.loadUrl(url)
+                                currentScreen = ScreenState.BROWSER
+                            },
+                            onOpenOfflineArticle = { article ->
+                                viewModel.openOfflineArticle(article)
                                 currentScreen = ScreenState.BROWSER
                             },
                             onDeleteBookmark = { url ->
                                 viewModel.removeBookmark(url)
                                 Toast.makeText(context, "已刪除書籤", Toast.LENGTH_SHORT).show()
+                            },
+                            onDeleteOfflineArticle = { url ->
+                                viewModel.removeOfflineArticle(url)
+                                Toast.makeText(context, "已刪除離線文章", Toast.LENGTH_SHORT).show()
                             },
                             onAddBookmark = { url, title ->
                                 viewModel.addBookmark(url, title)
@@ -302,16 +363,23 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                             isAdBlockEnabled = isAdBlockEnabled,
                             isWristGesturesEnabled = isWristGesturesEnabled,
                             rotarySpeed = rotarySpeed,
+                            isIncognitoMode = isIncognitoMode,
                             onSearchEngineChange = { viewModel.setSearchEngine(it) },
                             onTextZoomChange = { viewModel.setTextZoom(it) },
                             onTogglePureBlack = { viewModel.togglePureBlackMode() },
                             onToggleAdBlock = { viewModel.toggleAdBlock() },
                             onToggleWristGestures = { viewModel.toggleWristGestures() },
                             onRotarySpeedChange = { viewModel.setRotarySpeed(it) },
+                            onToggleIncognito = {
+                                viewModel.toggleIncognitoMode()
+                                val msg = if (!isIncognitoMode) "無痕隱私瀏覽已開啟 🕶️" else "已關閉無痕瀏覽"
+                                Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                            },
                             onClearData = {
                                 try {
                                     viewModel.clearHistory()
-                                    Toast.makeText(context, "歷史紀錄與快取已清除", Toast.LENGTH_SHORT).show()
+                                    viewModel.clearOfflineArticles()
+                                    Toast.makeText(context, "歷史紀錄與離線快取已清除", Toast.LENGTH_SHORT).show()
                                 } catch (e: Exception) {
                                     Toast.makeText(context, "清除完成", Toast.LENGTH_SHORT).show()
                                 }
@@ -347,6 +415,27 @@ fun BrowserScreen(viewModel: BrowserViewModel) {
                             viewModel.setTextZoom(newZoom)
                         },
                         onDismiss = { showZoomDialog = false }
+                    )
+                }
+
+                // 多標籤頁管理對話框
+                if (showTabsDialog) {
+                    TabsManagerDialog(
+                        isRound = isRound,
+                        tabs = tabs,
+                        activeTabId = activeTabId,
+                        onSelectTab = { id ->
+                            viewModel.switchTab(id)
+                            currentScreen = ScreenState.BROWSER
+                        },
+                        onCloseTab = { id ->
+                            viewModel.closeTab(id)
+                        },
+                        onNewTab = {
+                            viewModel.openNewTab()
+                            currentScreen = ScreenState.HOME
+                        },
+                        onDismiss = { showTabsDialog = false }
                     )
                 }
             }

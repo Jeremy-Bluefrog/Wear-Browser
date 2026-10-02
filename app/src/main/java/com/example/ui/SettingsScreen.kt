@@ -63,12 +63,14 @@ fun SettingsScreen(
     isAdBlockEnabled: Boolean,
     isWristGesturesEnabled: Boolean = true,
     rotarySpeed: Float = 2.0f,
+    isIncognitoMode: Boolean = false,
     onSearchEngineChange: (String) -> Unit,
     onTextZoomChange: (Int) -> Unit,
     onTogglePureBlack: () -> Unit,
     onToggleAdBlock: () -> Unit,
     onToggleWristGestures: () -> Unit,
     onRotarySpeedChange: (Float) -> Unit,
+    onToggleIncognito: () -> Unit,
     onClearData: () -> Unit,
     onBack: () -> Unit
 ) {
@@ -122,7 +124,7 @@ fun SettingsScreen(
                     }
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = "瀏覽器設定",
+                        text = "偏好設定",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary
@@ -130,90 +132,91 @@ fun SettingsScreen(
                 }
             }
 
-            // Material 3 ListSubheader: 搜尋引擎
+            // Material 3 ListSubheader: 預設搜尋引擎
             item {
                 ListSubheader(
                     modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f)
                 ) {
-                    Text(text = "預設搜尋引擎: $searchEngine", color = MaterialTheme.colorScheme.secondary)
+                    Text(text = "預設搜尋引擎", color = MaterialTheme.colorScheme.secondary)
                 }
             }
 
+            // 搜尋引擎選擇 Row 1
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    enginesRow1.forEach { eng ->
-                        val selected = eng == searchEngine
+                    enginesRow1.forEach { engine ->
+                        val selected = engine == searchEngine
                         if (selected) {
                             Button(
-                                onClick = { onSearchEngineChange(eng) },
+                                onClick = { onSearchEngineChange(engine) },
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(34.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
                                 )
                             ) {
-                                Text(text = eng, style = MaterialTheme.typography.labelSmall)
+                                Text(text = engine, style = MaterialTheme.typography.labelSmall)
                             }
                         } else {
                             FilledTonalButton(
-                                onClick = { onSearchEngineChange(eng) },
+                                onClick = { onSearchEngineChange(engine) },
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(34.dp)
                             ) {
-                                Text(text = eng, style = MaterialTheme.typography.labelSmall)
+                                Text(text = engine, style = MaterialTheme.typography.labelSmall)
                             }
                         }
                     }
                 }
             }
 
+            // 搜尋引擎選擇 Row 2
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f),
                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    enginesRow2.forEach { eng ->
-                        val selected = eng == searchEngine
-                        val displayTitle = if (eng == "DuckDuckGo") "DuckDuck" else eng
+                    enginesRow2.forEach { engine ->
+                        val selected = engine == searchEngine
                         if (selected) {
                             Button(
-                                onClick = { onSearchEngineChange(eng) },
+                                onClick = { onSearchEngineChange(engine) },
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(34.dp),
                                 colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                    containerColor = MaterialTheme.colorScheme.primary,
+                                    contentColor = MaterialTheme.colorScheme.onPrimary
                                 )
                             ) {
-                                Text(text = displayTitle, style = MaterialTheme.typography.labelSmall)
+                                Text(text = engine, style = MaterialTheme.typography.labelSmall)
                             }
                         } else {
                             FilledTonalButton(
-                                onClick = { onSearchEngineChange(eng) },
+                                onClick = { onSearchEngineChange(engine) },
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(34.dp)
                             ) {
-                                Text(text = displayTitle, style = MaterialTheme.typography.labelSmall)
+                                Text(text = engine, style = MaterialTheme.typography.labelSmall)
                             }
                         }
                     }
                 }
             }
 
-            // Material 3 ListSubheader: 顯示與縮放
+            // Material 3 ListSubheader: 網頁字體縮放
             item {
                 ListSubheader(
                     modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f)
                 ) {
-                    Text(text = "網頁字體縮放: $textZoom%", color = MaterialTheme.colorScheme.secondary)
+                    Text(text = "網頁字體縮放", color = MaterialTheme.colorScheme.secondary)
                 }
             }
 
@@ -345,16 +348,27 @@ fun SettingsScreen(
                 }
             }
 
-            // Material 3 ListSubheader: 功能與防護
+            // Material 3 ListSubheader: 隱私與手勢開關
             item {
                 ListSubheader(
                     modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f)
                 ) {
-                    Text(text = "省電與手勢開關", color = MaterialTheme.colorScheme.secondary)
+                    Text(text = "隱私與系統開關", color = MaterialTheme.colorScheme.secondary)
                 }
             }
 
-            // OLED 純黑深色模式 (使用 Material 3 SwitchButton 插槽)
+            // 無痕隱私瀏覽模式
+            item {
+                SwitchButton(
+                    checked = isIncognitoMode,
+                    onCheckedChange = { onToggleIncognito() },
+                    modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.94f),
+                    label = { Text("無痕隱私瀏覽") },
+                    secondaryLabel = { Text("不記錄瀏覽與搜尋歷史") }
+                )
+            }
+
+            // OLED 純黑深色模式
             item {
                 SwitchButton(
                     checked = isPureBlackMode,

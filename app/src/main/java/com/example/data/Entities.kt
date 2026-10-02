@@ -34,3 +34,15 @@ data class SearchHistory(
     val query: String,
     val timestamp: Long = System.currentTimeMillis()
 )
+
+@Entity(
+    tableName = "offline_articles",
+    indices = [Index(value = ["timestamp"])]
+)
+data class OfflineArticle(
+    @PrimaryKey val url: String,
+    val title: String,
+    val content: String,
+    val readingTimeMinutes: Int = 1,
+    val timestamp: Long = System.currentTimeMillis()
+)

@@ -6,6 +6,32 @@ class BrowserRepository(private val dao: BrowserDao) {
     val bookmarks: Flow<List<Bookmark>> = dao.getAllBookmarks()
     val history: Flow<List<HistoryEntry>> = dao.getAllHistory()
     val searchHistory: Flow<List<SearchHistory>> = dao.getAllSearchHistory()
+    val offlineArticles: Flow<List<OfflineArticle>> = dao.getAllOfflineArticles()
+
+    suspend fun saveOfflineArticle(url: String, title: String, content: String) {
+        val wordCount = content.length
+        val readingTime = (wordCount / 300).coerceAtLeast(1)
+        dao.insertOfflineArticle(
+            OfflineArticle(
+                url = url,
+                title = title.ifBlank { url },
+                content = content,
+                readingTimeMinutes = readingTime
+            )
+        )
+    }
+
+    suspend fun removeOfflineArticle(url: String) {
+        dao.deleteOfflineArticle(url)
+    }
+
+    suspend fun clearOfflineArticles() {
+        dao.clearAllOfflineArticles()
+    }
+
+    suspend fun getOfflineArticle(url: String): OfflineArticle? {
+        return dao.getOfflineArticle(url)
+    }
 
     suspend fun addBookmark(url: String, title: String) {
         dao.insertBookmark(Bookmark(url = url, title = title.ifBlank { url }))

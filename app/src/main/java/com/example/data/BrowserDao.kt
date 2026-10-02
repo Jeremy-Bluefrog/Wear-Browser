@@ -44,4 +44,19 @@ interface BrowserDao {
 
     @Query("DELETE FROM search_history")
     suspend fun clearSearchHistory()
+
+    @Query("SELECT * FROM offline_articles ORDER BY timestamp DESC")
+    fun getAllOfflineArticles(): Flow<List<OfflineArticle>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertOfflineArticle(article: OfflineArticle)
+
+    @Query("DELETE FROM offline_articles WHERE url = :url")
+    suspend fun deleteOfflineArticle(url: String)
+
+    @Query("DELETE FROM offline_articles")
+    suspend fun clearAllOfflineArticles()
+
+    @Query("SELECT * FROM offline_articles WHERE url = :url LIMIT 1")
+    suspend fun getOfflineArticle(url: String): OfflineArticle?
 }

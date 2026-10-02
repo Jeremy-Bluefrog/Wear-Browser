@@ -12,25 +12,31 @@ import androidx.core.content.ContextCompat
 import androidx.compose.material3.dynamicDarkColorScheme
 
 private val WearDarkColorScheme = ColorScheme(
-    primary = Color(0xFFD0BCFF),
-    onPrimary = Color(0xFF381E72),
-    primaryContainer = Color(0xFF4F378B),
-    onPrimaryContainer = Color(0xFFEADDFF),
-    secondary = Color(0xFFCCC2DC),
-    onSecondary = Color(0xFF332D41),
-    secondaryContainer = Color(0xFF4A4458),
-    onSecondaryContainer = Color(0xFFE8DEF8),
-    tertiary = Color(0xFFEFB8C8),
-    onTertiary = Color(0xFF492532),
-    tertiaryContainer = Color(0xFF633B48),
-    onTertiaryContainer = Color(0xFFFFD8E4),
-    error = Color(0xFFF2B8B5),
-    onError = Color(0xFF601410),
-    errorContainer = Color(0xFF8C1D18),
-    onErrorContainer = Color(0xFFF9DEDC),
+    primary = Color(0xFFA5EEFD),
+    onPrimary = Color(0xFF00373D),
+    primaryContainer = Color(0xFF004F58),
+    onPrimaryContainer = Color(0xFFA5EEFD),
+    secondary = Color(0xFFB1CBD0),
+    onSecondary = Color(0xFF1C3438),
+    secondaryContainer = Color(0xFF004F58),
+    onSecondaryContainer = Color(0xFFA5EEFD),
+    tertiary = Color(0xFFBAC6EA),
+    onTertiary = Color(0xFF24304D),
+    tertiaryContainer = Color(0xFF3B4664),
+    onTertiaryContainer = Color(0xFFD9E2FF),
+    error = Color(0xFFFFB4AB),
+    onError = Color(0xFF690005),
+    errorContainer = Color(0xFF93000A),
+    onErrorContainer = Color(0xFFFFDAD6),
     background = Color(0xFF000000), // Pure black for OLED
-    onBackground = Color(0xFFE6E1E5),
-    outline = Color(0xFF938F99)
+    onBackground = Color(0xFFE0E3E3),
+    outline = Color(0xFF899294),
+    outlineVariant = Color(0xFF3F484A),
+    surfaceContainerLow = Color(0xFF161D1E),
+    surfaceContainer = Color(0xFF1E262B),
+    surfaceContainerHigh = Color(0xFF252F34),
+    onSurface = Color(0xFFE0E3E3),
+    onSurfaceVariant = Color(0xFFBFC8CA)
 )
 
 @Composable
