@@ -353,7 +353,10 @@ fun HomeScreen(
                     ListSubheader(
                         modifier = Modifier.fillMaxWidth(if (isRound) 0.84f else 0.94f)
                     ) {
-                        Text(text = "離線下載內容 (${savedOfflineArticles.size})", color = Color(0xFF34D399))
+                        Text(
+                            text = "離線下載內容 (${savedOfflineArticles.size})",
+                            color = MaterialTheme.colorScheme.tertiary
+                        )
                     }
                 }
 
@@ -379,7 +382,7 @@ fun HomeScreen(
                             Icon(
                                 imageVector = Icons.AutoMirrored.Filled.MenuBook,
                                 contentDescription = null,
-                                tint = Color(0xFF34D399),
+                                tint = MaterialTheme.colorScheme.tertiary,
                                 modifier = Modifier.size(14.dp)
                             )
                         },
@@ -445,8 +448,8 @@ fun HomeScreen(
                     modifier = Modifier.fillMaxWidth(if (isRound) 0.82f else 0.92f),
                     colors = if (isIncognitoMode) {
                         ButtonDefaults.filledTonalButtonColors(
-                            containerColor = Color(0xFF4C1D95),
-                            contentColor = Color(0xFFE9D5FF)
+                            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
                         )
                     } else {
                         ButtonDefaults.filledTonalButtonColors()
@@ -458,7 +461,7 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.Default.Security,
                             contentDescription = null,
-                            tint = if (isIncognitoMode) Color(0xFFC084FC) else Color.LightGray,
+                            tint = if (isIncognitoMode) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -474,7 +477,7 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.Default.Bookmark,
                             contentDescription = null,
-                            tint = Color(0xFFF59E0B),
+                            tint = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -490,7 +493,7 @@ fun HomeScreen(
                         Icon(
                             imageVector = Icons.Default.Settings,
                             contentDescription = null,
-                            tint = Color(0xFFA78BFA),
+                            tint = MaterialTheme.colorScheme.secondary,
                             modifier = Modifier.size(16.dp)
                         )
                     }
